@@ -1,0 +1,51 @@
+; NOTE: program uses extended interpolation, so mask your '$' character with double '$$'
+[DEFAULT]
+; here we post json like: { "date":"Mon Sep 28 12:45:55 2020", "timestamp":1601286355 }
+updated_topic = updated
+
+; the following are paths relative to device_topic:
+; nagios-like status, e.g. from check_ide_smart for /dev/sdX
+state_topic = state
+
+;====================================
+[storage]
+;sender = /etc/smarthome/mqtt/mqtt --stdin --quiet storage-reports
+;sender = /etc/smarthome/mqtt/mqtt --stdin storage-reports
+sender = /bin/cat
+
+; section for storage status reporter.
+;check_ide_smart = /usr/lib64/nagios/plugins/check_ide_smart
+; Specify full path and name of smartctl w/o parameters
+smartctl = /usr/sbin/smartctl
+
+; root for all topics.
+root_topic = sys/<HOST>/hw/storage
+
+; device's root topic. $$device will be substituted by the device name w/o /dev/
+device_topic = ${root_topic}/$$device
+
+temperature_topic = temperature
+
+; comment these out if you do not want to get specific topic filled with raw data
+;attributes_topic = attributes
+;error_log_topic = errors
+;raw_smart_topic = raw_smart
+;tests_log_topic = tests
+
+; how many hours to include entries from error log into status message ( default is 10 days = 240 hours )
+;max_error_nag_hours = 240
+
+; warn if test were not done for this amount of hours ( default is 7 days = 168 hours )
+;max_tests_age = 168
+
+; This is individual drive model settings:
+; The format is:
+; drive model as reported by smartctl, w/o spaces = flag[, flag...]
+; The flags are:
+;    no_tests_log - if you have the drive like intel 520 series that does not provide tests log at all
+;    short_test_log_time - Spotted on my WD AV-GP: When lifetime in test log is 2byte
+;                          and reported as remainder of "Power On hours" division by 65535
+
+INTELSSDSC2CW120A3 = no_tests_log
+WDCWD30EURS-63SPKY0 = short_test_log_time
+

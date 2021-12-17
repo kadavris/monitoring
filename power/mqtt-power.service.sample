@@ -1,0 +1,14 @@
+[Unit]
+Description=Power status to MQTT daemon
+After=network.target nut-server.service
+
+[Service]
+User=nut
+Group=smarthome
+ExecStart=/etc/smarthome/reporters/mqtt-power --loop 20
+WorkingDirectory=/etc/smarthome/reporters
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

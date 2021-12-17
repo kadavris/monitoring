@@ -1,0 +1,24 @@
+#!/bin/bash
+# This script is a part of smarthome pack
+# It will send initial data about this host to the mqtt
+
+sender="/etc/smarthome/mqtt/mqtt --stdin --quiet"
+
+host=`hostname|sed "s/\n//"`
+prefix="sys/$host"
+
+touch /run/mqtt-boot-send.runonce
+
+{
+  msg=`uname -a|sed "s/\n//" `
+  echo '{ "publish":"'$msg'", "retain":true, "topics":[ "'$prefix'" ] }'
+
+  msg=`uname -o|sed "s/\n//" `
+  echo '{ "publish":"'$msg'", "retain":true, "topics":[ "'$prefix/type'" ] }'
+
+  sleep 5 # give it some more time to process
+  echo '{ "cmd":"exit" }'
+  sleep 5 # give it some more time to process
+
+  exit 0
+} | $sender

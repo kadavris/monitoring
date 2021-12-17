@@ -1,0 +1,4 @@
+#!/bin/sh
+su smarthome -s /bin/sh -c './mqtt-power --debug'
+pkill -9 -f mqtt-power
+pkill -9 -f power-reports

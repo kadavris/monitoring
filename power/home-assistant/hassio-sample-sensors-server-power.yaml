@@ -1,0 +1,55 @@
+#------------------------------------------------
+# UPS:
+#------------------------------------------------
+- platform: mqtt
+  state_topic: "hw/power/eaton1500/state"
+  name: "Main UPS: state"
+  json_attributes_topic: "hw/power/eaton1500"
+  device:
+    manufacturer: "{{ value_json.device_mfr }}"
+    model: "{{ value_json.device_model }}"
+    name: "Main UPS"
+    identifiers: "Eaton 1500"
+- platform: mqtt
+  state_topic: "hw/power/eaton1500/out_load"
+  name: "Main UPS: load"
+  unit_of_measurement: '%'
+  device_class: power
+- platform: mqtt
+  state_topic: "hw/power/eaton1500/batt_charge"
+  name: "Main UPS: battery charge"
+  unit_of_measurement: '%'
+  device_class: battery
+- platform: mqtt
+  state_topic: "hw/power/eaton1500/in_volts"
+  name: "Main UPS: input voltage"
+  unit_of_measurement: 'V'
+  device_class: voltage
+
+# UPS: data freshness check
+- platform: mqtt
+  state_topic: "hw/power/eaton1500/updated"
+  json_attributes_topic: "hw/power/eaton1500/updated"
+  name: "Main UPS: last update"
+  device_class: timestamp
+  value_template: "{{ value_json.timestamp }}"
+
+- platform: template
+  sensors:
+    main_ups_state_freshness:
+      friendly_name: "Main UPS: data freshness check"
+      value_template: >-
+        {% set topic_u = 'sensor.main_ups_last_update' %}
+        {% if as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          OLD: {{ state_attr( topic_u, 'date' ) }}
+        {% else %}
+          OK
+        {% endif %}
+      icon_template: >-
+        {% set topic_u = 'sensor.main_ups_last_update' %}
+        {% if as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          mdi:battery-unknown
+        {% else %}
+          mdi:battery-heart-variant
+        {% endif %}
+

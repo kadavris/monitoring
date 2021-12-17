@@ -1,0 +1,15 @@
+[Unit]
+Description=Storage status to MQTT daemon
+After=syslog.target network.target
+
+[Service]
+# smartctl will not work if not root
+User=root
+Group=smarthome
+ExecStart=/etc/smarthome/reporters/mqtt-storage-sd-reports --loop 60
+WorkingDirectory=/etc/smarthome/reporters
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

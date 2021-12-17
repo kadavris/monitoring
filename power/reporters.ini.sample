@@ -1,0 +1,79 @@
+; NOTE: program uses extended interpolation, so mask your '$' character with double '$$'
+[DEFAULT]
+; here we post json like: { "date":"Mon Sep 28 12:45:55 2020", "timestamp":1601286355 }
+updated_topic = updated
+
+; the following are paths relative to device_topic:
+; nagios-like status, e.g. from check_ide_smart for /dev/sdX
+state_topic = state
+
+;====================================
+[power]
+; for debugging. use our mqtt-tool or another agent that understand json input
+sender = /bin/cat
+
+; Here is sample hieararchy that I use in my smarthome setup
+;power
+;     <dev_id> - json with other data goes here
+;         ctl... - if you need some control
+;         batt_charge - battery charge level
+;         in_volts - input voltage
+;         out_load - ups load in percent
+;         state - OL, BOOST, etc...
+;         type - device type (e.g. "ups")
+;         updated - { "date":"human readable date", "timestamp":unix_timestamp, checks stats }
+
+; root for all topics.
+root_topic = hw/power
+
+;devices = uncomment and supply your space-separated list if you don't want to rely on upsc -l output
+
+; device's root topic. $$device will be substituted by the device name
+device_topic = ${root_topic}/$$device
+
+; NOTE: replace all '.' with '_'! Reported attribute names will be processed in this way
+
+; attribute to sub-topic name map to post directly. space-separated attr:topic pairs
+one_to_one = device_type:type 
+  battery_charge:batt_charge
+  input_voltage:in_volt
+  ups_load:out_load
+
+; these attributes will be included into report to device_topic under the "attributes"{} json section
+; separate by space, multiline allowed
+; NOTE that device_mfr,  device_model,  device_type and  ups_status will be included always
+bulk_report = battery_charge
+  battery_runtime
+  input_voltage
+  input_current
+  input_frequency
+  input_load
+  input_power
+  output_voltage
+  output_frequency
+  output_current
+  ups_alarm
+  ups_load
+  ups_power
+  ups_power_nominal
+
+; --------------------
+; this section is about what and how frequent to report
+; your country's standard voltage,frequency and tolerance percentages
+standard_v = 220,10
+standard_freq = 50,4
+
+; get reading every N seconds
+sample_interval = 10
+
+; comment if you don't need to log raw samples
+log_samples = /var/log/smarthome/$$device.log
+log_items = input_voltage
+  voltage_mean_minute
+  frequency_mean_minute
+  battery_charge
+  ups_status
+
+; report data to server every N seconds
+report_interval = 30
+

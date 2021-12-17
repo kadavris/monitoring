@@ -1,0 +1,135 @@
+#------------------------------------------------
+# server:
+#------------------------------------------------
+
+# sda
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sda/state"
+  name: "server_sda_mqtt_state"
+
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sda/state"
+  json_attributes_topic: "sys/server/hw/storage/sda"
+  name: "server_sda"
+
+# model/SN
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sda"
+  json_attributes_topic: "sys/server/hw/storage/sda"
+  name: "server: sda model"
+  value_template: "{{ value_json.model }}"
+
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sda/temperature"
+  name: "server: sda temperature"
+  unit_of_measurement: '°C'
+  device_class: temperature
+
+# data freshness
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sda/updated"
+  json_attributes_topic: "sys/server/hw/storage/sda/updated"
+  name: "server: sda last update"
+  value_template: "{{ value_json.timestamp }}"
+
+- platform: template
+  sensors:
+    server_sda_freshness:
+      friendly_name: "server: sda data freshness check"
+      value_template: >-
+        {% set topic_u = 'sensor.server_sda_last_update' %}
+        {% if states( topic_u )|int(default=0) == 0 or as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          OLD: {{ state_attr( topic_u, 'date' ) }}
+        {% else %}
+          OK
+        {% endif %}
+      icon_template: >-
+        {% set topic_u = 'sensor.server_sda_last_update' %}
+        {% if states( topic_u )|int(default=0) == 0 or as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          mdi:disc-alert
+        {% else %}
+          mdi:harddisk
+        {% endif %}
+
+- platform: template
+  sensors:
+    server_sda_state:
+      friendly_name: "server: sda state"
+      value_template: >-
+        {% if states( 'sensor.server_sda_freshness' ) != "OK" %}
+          {{ states( 'sensor.server_sda_freshness' ) }}
+        {% else %}
+          {% if states( 'sensor.server_sda_mqtt_state' ) != 'OK' %}
+            {{ states( 'sensor.server_sda_mqtt_state' ) }}
+          {% endif %}
+          {% if states( 'sensor.server_sda_temperature' ) != 'UNKNOWN' %}
+            {% if states( 'sensor.server_sda_temperature' )|float > 42 %}
+              OVERHEATING: {{ states( 'sensor.server_sda_temperature' ) }}
+              ( {{ states( 'sensor.server_sda_model' ) }} )
+            {% endif %}
+          {% endif %}
+        {% endif %}
+
+# sdb -----------------------------------------------
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sdb/state"
+  name: "server_sdb_mqtt_state"
+
+# model/SN
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sdb"
+  json_attributes_topic: "sys/server/hw/storage/sdb"
+  name: "server: sdb model"
+  value_template: "{{ value_json.model }}"
+
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sdb/temperature"
+  name: "server: sdb temperature"
+  unit_of_measurement: '°C'
+  device_class: temperature
+
+# data freshness
+- platform: mqtt
+  state_topic: "sys/server/hw/storage/sdb/updated"
+  json_attributes_topic: "sys/server/hw/storage/sdb/updated"
+  name: "server: sdb last update"
+  value_template: "{{ value_json.timestamp }}"
+
+- platform: template
+  sensors:
+    server_sdb_freshness:
+      friendly_name: "server: sdb data freshness check"
+      value_template: >-
+        {% set topic_u = 'sensor.server_sdb_last_update' %}
+        {% if states( topic_u )|int(default=0) == 0 or as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          OLD: {{ state_attr( topic_u, 'date' ) }}
+        {% else %}
+          OK
+        {% endif %}
+      icon_template: >-
+        {% set topic_u = 'sensor.server_sdb_last_update' %}
+        {% if states( topic_u )|int(default=0) == 0 or as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          mdi:disc-alert
+        {% else %}
+          mdi:harddisk
+        {% endif %}
+
+- platform: template
+  sensors:
+    server_sdb_state:
+      friendly_name: "server: sdb state"
+      value_template: >-
+        {% if states( 'sensor.server_sdb_freshness' ) != "OK" %}
+          {{ states( 'sensor.server_sdb_freshness' ) }}
+        {% else %}
+          {% if states( 'sensor.server_sdb_mqtt_state' ) != 'OK' %}
+            {{ states( 'sensor.server_sdb_mqtt_state' ) }}
+          {% endif %}
+          {% if states( 'sensor.server_sdb_temperature' ) != 'UNKNOWN' %}
+            {% if states( 'sensor.server_sdb_temperature' )|float > 42 %}
+              OVERHEATING: {{ states( 'sensor.server_sdb_temperature' ) }}
+              ( {{ states( 'sensor.server_sdb_model' ) }} )
+            {% endif %}
+          {% endif %}
+        {% endif %}
+
