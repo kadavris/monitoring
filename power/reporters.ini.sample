@@ -33,14 +33,15 @@ device_topic = ${root_topic}/$$device
 
 ; NOTE: replace all '.' with '_'! Reported attribute names will be processed in this way
 
-; attribute to sub-topic name map to post directly. space-separated attr:topic pairs
+; upsc reported attribute to sub-topic name map to post directly. space-separated attr:topic pairs
 one_to_one = device_type:type 
   battery_charge:batt_charge
   input_voltage:in_volt
   ups_load:out_load
 
-; these attributes will be included into report to device_topic under the "attributes"{} json section
-; separate by space, multiline allowed
+; these attributes will be included into combined report to device_topic
+; under the "attributes"{} json section.
+; separate by space, multiline allowed.
 ; NOTE that device_mfr,  device_model,  device_type and  ups_status will be included always
 bulk_report = battery_charge
   battery_runtime
@@ -59,14 +60,14 @@ bulk_report = battery_charge
 
 ; --------------------
 ; this section is about what and how frequent to report
-; your country's standard voltage,frequency and tolerance percentages
+; your country's standard voltage, frequency and tolerance percentages
 standard_v = 220,10
 standard_freq = 50,4
 
-; get reading every N seconds
+; get actual reading every N seconds
 sample_interval = 10
 
-; comment if you don't need to log raw samples
+; comment if you don't need to log raw samples into big big file
 log_samples = /var/log/smarthome/$$device.log
 log_items = input_voltage
   voltage_mean_minute
@@ -74,6 +75,6 @@ log_items = input_voltage
   battery_charge
   ups_status
 
-; report data to server every N seconds
+; push data to sender every N seconds
 report_interval = 30
 

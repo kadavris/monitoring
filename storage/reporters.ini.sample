@@ -9,6 +9,7 @@ state_topic = state
 
 ;====================================
 [storage]
+; The program that will actually deliver the data to the end-point like MQTT broker
 ;sender = /etc/smarthome/mqtt/mqtt --stdin --quiet storage-reports
 ;sender = /etc/smarthome/mqtt/mqtt --stdin storage-reports
 sender = /bin/cat
@@ -19,32 +20,34 @@ sender = /bin/cat
 smartctl = /usr/sbin/smartctl
 
 ; root for all topics.
+; ! Change <HOST> to reflect your host name or whatever
 root_topic = sys/<HOST>/hw/storage
 
-; device's root topic. $$device will be substituted by the device name w/o /dev/
+; device's root topic.
+; The special macro: '$$device' will be substituted with the device's name without /dev/ prefix
 device_topic = ${root_topic}/$$device
 
 temperature_topic = temperature
 
-; comment these out if you do not want to get specific topic filled with raw data
+; comment these out if you do not want to get specific topic filled with raw S.M.A.R.T data
 ;attributes_topic = attributes
 ;error_log_topic = errors
 ;raw_smart_topic = raw_smart
 ;tests_log_topic = tests
 
-; how many hours to include entries from error log into status message ( default is 10 days = 240 hours )
+; how many hours to include new entries from error log into status message ( default is 10 days = 240 hours )
 ;max_error_nag_hours = 240
 
 ; warn if test were not done for this amount of hours ( default is 7 days = 168 hours )
 ;max_tests_age = 168
 
 ; This is individual drive model settings:
-; The format is:
-; drive model as reported by smartctl, w/o spaces = flag[, flag...]
-; The flags are:
+; The format of key name is drive model, as reported by smartctl, but without spaces
+; The flags in list should be separated by commas:
 ;    no_tests_log - if you have the drive like intel 520 series that does not provide tests log at all
 ;    short_test_log_time - Spotted on my WD AV-GP: When lifetime in test log is 2byte
-;                          and reported as remainder of "Power On hours" division by 65535
+;                          and reported as remainder of "Power On hours" division by 65536
+;                          This will produce some mild warnings sometimes, instead of "no tests run for year".
 
 INTELSSDSC2CW120A3 = no_tests_log
 WDCWD30EURS-63SPKY0 = short_test_log_time

@@ -201,9 +201,9 @@ def get_upsc_output(device):
 
         if device not in stats:  # init
             stats[device] = {
-                'mstart': 0, 'm_v_mean': v, 'mv': v, 'mf': f, 'm_f_mean': f, 'msamples': 1,
-                'hstart': 0, 'h_v_mean': v, 'hv': v, 'hf': f, 'h_f_mean': f, 'hsamples': 1,
-                'dstart': 0, 'd_v_mean': v, 'dv': v, 'df': f, 'd_f_mean': f, 'dsamples': 1
+                'mstart': 0, 'm_v_mean': v, 'mv': v, 'mf': f, 'm_f_mean': f, 'msamples': 1, # minute
+                'hstart': 0, 'h_v_mean': v, 'hv': v, 'hf': f, 'h_f_mean': f, 'hsamples': 1, # hour
+                'dstart': 0, 'd_v_mean': v, 'dv': v, 'df': f, 'd_f_mean': f, 'dsamples': 1  # day
             }
 
         update_stats(device, 'm', t.tm_min, v, f)
