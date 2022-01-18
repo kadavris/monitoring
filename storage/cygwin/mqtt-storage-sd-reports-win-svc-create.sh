@@ -24,11 +24,17 @@ do
   p=`readlink "$p"`
 done
 
+# not a full path yet?
+if [ ! -f $p ]
+then
+  p=`which "$p" | head -1`
+fi
+
 echo Stopping.
 cygrunsrv -V -E $svcname
 echo Removing.
 cygrunsrv -V -R $svcname
 echo Installing.
-cygrunsrv -V -I $svcname -p "${p}.exe" -a "$cwd/$svcname -l 20" -1 "$logdir/$svcname.log" -2 "$logdir/$svcname.log"
+cygrunsrv -V -I $svcname -p "${p}" -a "$cwd/$svcname -l 60" -1 "$logdir/$svcname.log" -2 "$logdir/$svcname.log"
 echo Running.
 cygrunsrv -V -S $svcname
