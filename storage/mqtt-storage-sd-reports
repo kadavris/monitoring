@@ -95,7 +95,7 @@ def load_config(c_file: str, default_path: str):
     config_full = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
     config_full.read(file)
 
-    if not 'storage' in config_full:
+    if 'storage' not in config_full:
         print("! Config is missing 'storage' section!", file=sys.stderr)
         sys.exit(1)
 
@@ -115,9 +115,9 @@ def spawn_sender() -> None:
                               # default bufsize may gobble a whole loop of data and do nothing till the next
                               stdin=subprocess.PIPE,
                               stdout=None if args.debug or config['sender'].find('--debug')
-                                      else subprocess.STDOUT,
+                              else subprocess.STDOUT,
                               stderr=None if args.debug or config['sender'].find('--debug')
-                                      else subprocess.DEVNULL,
+                              else subprocess.DEVNULL,
                               text=True)
 
     if sender.poll():  # poll() return None if process is still there
@@ -133,7 +133,7 @@ def spawn_sender() -> None:
 def send_message_raw(msg: str) -> None:
     """
     Sends another message to the spawned mqtt agent
-    :param in_msg: string. sent as is
+    :param msg: string. sent as is
     :return: None
     """
     global sender
@@ -143,10 +143,10 @@ def send_message_raw(msg: str) -> None:
         if sender.poll():  # check if it is still alive (not None)
             spawn_sender()
 
-        try:
-            if args.debug:
-                print('> Sending:', msg)
+        if args.debug:
+            print('> Sending:', msg)
 
+        try:
             sender.stdin.write(msg)
             sender.stdin.write("\n")
         except:
@@ -166,7 +166,7 @@ def send_message_raw(msg: str) -> None:
         else:
             break
 
-        #waiting for 3 sec for answer
+        # waiting for 3 sec for answer
         if sender.stdout:
             answer = ''
             # gobble previous answers before checking last RC
@@ -180,14 +180,14 @@ def send_message_raw(msg: str) -> None:
                 print(time.localtime(), "!ERROR processing packet: ", ''.join(msg),
                       file=sys.stderr)
         else:
-            time.sleep(3.0) # let it process then
+            time.sleep(3.0)  # let it process then
 
 
 ########################################
 def send_message(*in_msg) -> None:
     """
     Sends another message to the spawned mqtt agent
-    :param msg: list of strings: parts of the message
+    :param in_msg: list of strings: parts of the message
     :return: None
     """
 
@@ -196,6 +196,7 @@ def send_message(*in_msg) -> None:
     msg = re.sub(r"([^\\])\n", "\\1\\\n", "".join(in_msg))
 
     send_message_raw(msg)
+
 
 ########################################
 def send_long(topic, *msg):
@@ -211,7 +212,7 @@ def send_long(topic, *msg):
     stop_word = config["stop word"] if "stop word" in config else "3%g3h@544/ujW^r}gj" 
 
     send_message_raw('{ "mpublish":"' + stop_word + '", "retain":true,' +
-                 ' "topics":[ "' + topic + '" ] }\n' + ''.join(msg) + stop_word)
+                     ' "topics":[ "' + topic + '" ] }\n' + ''.join(msg) + stop_word)
 
 
 ########################################
@@ -254,7 +255,6 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
     This routine will parse the JSON formatted output from smartctl
     and will send processed stuff to the mqtt topics hierarchy (see top of file for explanation)
     NOTE: The combined state analysis will be posted in do_smartctl() final
-
     :param sctl_output_text: raw smartctl output
     :param ret: returns the parsed data here - see do_smartctl for details
     :param device_topic: name of mqtt topics base for reports
@@ -355,7 +355,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
             if ret["power_on_time"] < elog["lifetime_hours"] + int(config["max_error_nag_hours"]):
                 err_or_warn_section = "errors"  # still fresh
             else:
-                err_or_warn_section = "warnings"  # to not loose them at all
+                err_or_warn_section = "warnings"  # to not lose them at all
 
             msg = elog["error_description"] + " @ " + str(elog["lifetime_hours"])
 
@@ -393,14 +393,22 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
         last_short_test_age = 0
         last_long_test_age = 0
 
+        # to properly report unfinished tests we'll count only the latest (topmost)
+        # Mark as True because it is reset on 1st passed,
+        # and still we need to report first in list if it failed
+        last_inconclusive = True
+
         for tlog in sctl_json["ata_smart_self_test_log"]["standard"]["table"]:
             ret["tests done"] += 1
 
             # test record may lack "passed" attribute if test has been interrupted.
-            # we'll not count this at all
+            # we'll not count this at all, but report inconclusive if it is the latest one(s)
             if "passed" not in tlog["status"]:
-                ret["tests inconclusive"] += 1
+                if last_inconclusive:
+                    ret["tests inconclusive"] += 1
                 continue
+            else:
+                last_inconclusive = False
 
             test_date = tlog["lifetime_hours"]
 
@@ -422,7 +430,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
         # we'll report short tests problems if there are problems with long test too
         short_tests_status = ""
 
-        if "short_test_log_time" in model_flags: # if test log time is stored as uint16
+        if "short_test_log_time" in model_flags:  # if test log time is stored as uint16
             lifetime = ret["power_on_time"] % 65536
         else:
             lifetime = ret["power_on_time"]
@@ -433,9 +441,9 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
             if lifetime < last_short_test_age:  # happen if test's timestamps are wrapped
                 # I know it's inaccurate and "broken clock show correct time twice a day",
                 # but the best solution IMHO is to cache old results to see if there were any changes
-                last_short_test_days = int( abs( lifetime - ( 65536 - last_short_test_age ) ) / 24 )
+                last_short_test_days = int(abs(lifetime - (65536 - last_short_test_age)) / 24)
             else:
-                last_short_test_days = int( ( lifetime - last_short_test_age ) / 24 )
+                last_short_test_days = int((lifetime - last_short_test_age) / 24)
 
             if last_short_test_days > int(config["max_tests_age"]):
                 short_tests_status = " and SHORT tests also didn't run for " + \
@@ -445,9 +453,9 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
             ret["testing status"] = "LONG tests was NEVER run" + short_tests_status
         else:
             if lifetime < last_short_test_age:  # happen if test's timestamps are wrapped
-                last_long_test_days = int( abs( lifetime - ( 65536 - last_long_test_age ) ) / 24 )
+                last_long_test_days = int(abs(lifetime - (65536 - last_long_test_age)) / 24)
             else:
-                last_long_test_days = int( ( lifetime - last_long_test_age ) / 24 )
+                last_long_test_days = int((lifetime - last_long_test_age) / 24)
 
             if last_long_test_days > int(config["max_tests_age"]):
                 ret["testing status"] = "LONG tests didn't run for " + str(last_long_test_days) \
@@ -467,7 +475,6 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
 def do_smartctl(device: str, device_topic: str) -> dict:
     """
     Collects data from smartctl. Run parser. Post basic data.
-
     :param device: path to the device file
     :param device_topic: root topic for this device
     :return: hash made by process_sctl_json() or other low-level data processor
@@ -484,7 +491,7 @@ def do_smartctl(device: str, device_topic: str) -> dict:
         "testing status": "",  # a summary for testing procedures
         "tests done": 0,
         "tests failed": 0,
-        "tests inconclusive": 0, # some tests may have been interrupted and pass status is not available
+        "tests inconclusive": 0,  # some tests may have been interrupted and pass status is not available
         "type": "",           # "HDD" or "SSD" - loosely based on TRIM support and rotation speed
         "warnings_count": 0,  # total number of warning conditions encountered
         "warnings": [],       # array of all warning conditions in string form
@@ -514,7 +521,7 @@ def do_smartctl(device: str, device_topic: str) -> dict:
 
     sctl.terminate()
 
-    # send raw smart data. doing this anyway even if output is invalid, so it get visible
+    # send raw smart data. doing this anyway even if output is invalid, so it gets visible
     if "raw_smart_topic" in config:
         send_long(device_topic + "/" + config["raw_smart_topic"], json_string)
 
@@ -618,13 +625,12 @@ def check_storage_sd() -> None:
                   + " }"
 
             if sctl["tests failed"] > 0:
-                state.append(str(sctl["tests failed"]) + " of " + str(sctl["tests done"]) \
+                state.append(str(sctl["tests failed"]) + " of " + str(sctl["tests done"])
                              + " recent tests failed!")
                 severity += 1
 
             if sctl["tests inconclusive"] > 0:
-                state.append(str(sctl["tests inconclusive"]) + " of " + str(sctl["tests done"]) \
-                             + " recent tests are inconclusive!")
+                state.append(str(sctl["tests inconclusive"]) + " latest tests were not finished!")
                 severity += 0.2
 
             if sctl["status"] != "OK":  # e.g. some value went below threshold - pre-fail state at least
@@ -709,10 +715,10 @@ else:
 
 #  Set some defaults:
 if "max_error_nag_hours" not in config:
-    config["max_error_nag_hours"] = str( 24 * 10 )
+    config["max_error_nag_hours"] = str(24 * 10)
 
 if "max_tests_age" not in config:
-    config["max_tests_age"] = str( 7 * 24 )
+    config["max_tests_age"] = str(7 * 24)
 
 while True:
     dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'

@@ -37,16 +37,16 @@ It is named after /dev/sd? block device name.
 JSON, high-level analysis of drive's state going here:
 ```
 {
-     NOTE: these may go from smart or nagios plugin:
+     NOTE: these may go from S.M.A.R.T or nagios plugin:
      "status":"OK or error message...",
-     "checks run":count, - the number of different check procedure we ran (smart/nagios plugin/etc)
+     "checks run":count, - the number of different check procedure we ran (S.M.A.R.T/nagios plugin/etc)
      "checks with errors":count - and how many are failed
      
      NOTE: these are from smartctl only:
      "model":"device model + S/N",
-     "tests done":count, - how many smart test are in log
+     "tests done":count, - how many S.M.A.R.T test are in log
      "tests failed":count, - and how many failed
-     "tests inconclusive":count, - mostly, the count of aborted tests
+     "tests inconclusive":count, - the count of latest, unfinished tests
 }
 ```
 Then there are topics dedicated to bear specific bits of data, that should be available without the need of parsing:
@@ -62,7 +62,7 @@ You may also specify the names of topics in .ini that will be filled with raw S.
    `id:{ "name":"Human-readable name", "value":"S.M.A.R.T value", "raw":"S.M.A.R.T raw" }`
 * `<error_log_topic>` - Also JSON of raw error log entries from S.M.A.R.T:
    `{ lifetime_hours:"error_description", ...  }`
-* `<raw_smart_topic>` - unprocessed smart data as received from smartctl. JSON format.
+* `<raw_smart_topic>` - unprocessed S.M.A.R.T data as received from smartctl. JSON format.
 * `<tests_log_topic>` - JSON of raw tests log entries from S.M.A.R.T:
   `{ lifetime_hours:"test status", ...  }`
 
