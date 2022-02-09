@@ -403,12 +403,13 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
 
             # test record may lack "passed" attribute if test has been interrupted.
             # we'll not count this at all, but report inconclusive if it is the latest one(s)
-            if "passed" not in tlog["status"]:
-                if last_inconclusive:
-                    ret["tests inconclusive"] += 1
-                continue
-            else:
-                last_inconclusive = False
+            if tlog["type"]["value"] == 2:  # only long ones count
+                if "passed" not in tlog["status"]:
+                    if last_inconclusive:
+                        ret["tests inconclusive"] += 1
+                    continue
+                else:
+                    last_inconclusive = False
 
             test_date = tlog["lifetime_hours"]
 
@@ -450,7 +451,10 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
                                      str(last_short_test_days) + " days"
 
         if last_long_test_age == 0:
-            ret["testing status"] = "LONG tests was NEVER run" + short_tests_status
+            if ret["tests inconclusive"] > 0:
+                ret["testing status"] = "ALL LONG tests were unfinished" + short_tests_status
+            else:
+                ret["testing status"] = "LONG tests was NEVER run" + short_tests_status
         else:
             if lifetime < last_short_test_age:  # happen if test's timestamps are wrapped
                 last_long_test_days = int(abs(lifetime - (65536 - last_long_test_age)) / 24)
