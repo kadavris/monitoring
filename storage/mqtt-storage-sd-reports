@@ -9,7 +9,7 @@ The MQTT hierarchy tree is pictured below. See .ini file for options with actual
         {
              these may go from smart or nagios plugin:
              "status":"OK or error message...",
-             "checks run":count, - the number of different check procedure we ran (smart/nagios plugin/etc)
+             "checks run":count, - the number of different check procedure we ran (smart/nagios plugin/etc.)
              "checks with errors":count - and how many are failed
              these are from smart only:
              "model":"device model + S/N",
@@ -64,7 +64,7 @@ def handle_termination(signum, frame) -> None:
 
 
 #############################################################
-def load_config(c_file: str, default_path: str):
+def load_config(c_file: str, default_path: str) -> None:
     """
     Loads .ini and may do some initializing of defaults
     :param c_file: str. Path to .ini file
@@ -199,7 +199,7 @@ def send_message(*in_msg) -> None:
 
 
 ########################################
-def send_long(topic, *msg):
+def send_long(topic, *msg) -> None:
     """
     Sends complex message to the mqtt agent
     :param topic: topic name
@@ -250,7 +250,26 @@ def get_mounts() -> None:
 
 
 ########################################
-def process_sctl_json(sctl_output_text, ret, device_topic):
+def nested_keys_exists(in_hash, *keys) -> bool:
+    """
+    Will check if _all_ nested keys exists in dict
+    :param in_hash: top-level dict
+    :param keys: array of sub-keys to dive into
+    :returns True if path is valid
+    """
+    sub_hash = in_hash
+
+    for key in keys:
+        if not key in sub_hash:
+            return False
+
+        sub_hash = sub_hash[key]
+
+    return True
+
+
+########################################
+def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
     """
     This routine will parse the JSON formatted output from smartctl
     and will send processed stuff to the mqtt topics hierarchy (see top of file for explanation)
@@ -258,13 +277,17 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
     :param sctl_output_text: raw smartctl output
     :param ret: returns the parsed data here - see do_smartctl for details
     :param device_topic: name of mqtt topics base for reports
-    :return: bool: False if  processing error were encountered
+    :return: bool: False if processing error were encountered
     """
     global args, config
 
     try:
         sctl_json = json.loads(sctl_output_text)
     except:
+        return False
+
+    if "model_name" not in sctl_json:
+        ret["status"] = "smartctl returned incompete data"
         return False
 
     if sctl_json["json_format_version"][0] != 1 and sctl_json["json_format_version"][1] != 0:
@@ -301,7 +324,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
                                              + '", "value":"' + str(sctl_attr["value"])
                                              + '", "raw":"' + sctl_attr["raw"]["string"] + '" }')
 
-        if sctl_attr["id"] in val_less_than_threshold:  # check if value crossed threshold
+        if sctl_attr["id"] in val_less_than_threshold:  # check if value has crossed threshold
             if (val_less_than_threshold[sctl_attr["id"]] and sctl_attr["value"] < sctl_attr["thresh"]) \
                or (not val_less_than_threshold[sctl_attr["id"]] and sctl_attr["value"] > sctl_attr["thresh"]):
 
@@ -342,8 +365,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
     # =============================================================
     # In this section we will check the error log for fresh entries
 
-    if "ata_smart_error_log" in sctl_json \
-            and "logged_count" in sctl_json["ata_smart_error_log"]["summary"] \
+    if nested_keys_exists(sctl_json, "ata_smart_error_log", "summary", "logged_count" ) \
             and sctl_json["ata_smart_error_log"]["summary"]["logged_count"] > 0:
 
         if "error_log_topic" in config:  # we'll extract shorter attributes list for posting into separate topic
@@ -378,7 +400,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic):
 
     # =============================================================
     #  In this section we check the tests log for problems
-    if "ata_smart_self_test_log" not in sctl_json:
+    if not nested_keys_exists(sctl_json, "ata_smart_self_test_log", "standard", "table"):
         if "no_tests_log" not in model_flags:
             ret["testing status"] = "NO tests were recorded! Or test logging is not supported."
         else:
@@ -588,7 +610,7 @@ def check_storage_sd() -> None:
         state = []  # we'll try to determine it by any test enabled
         severity = 0  # how bad troubles are. 0-OK, 1-warn, >1 - crit
 
-        # doing check_ide_smart run if configured
+        # doing nagios's check_ide_smart run if configured
         if "check_ide_smart" in config:
             checks_run += 1
             params = shlex.split(config["check_ide_smart"])
