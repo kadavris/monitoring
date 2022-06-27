@@ -12,14 +12,16 @@ The MQTT hierarchy tree is pictured below. See .ini file for options with actual
              "checks run":count, - the number of different check procedure we ran (smart/nagios plugin/etc.)
              "checks with errors":count - and how many are failed
              these are from smart only:
-             "model":"device model + S/N",
+             "model":"device model",
+             "serial":"device S/N",
+             "id":"device model + S/N. must be unique anyway",
+             "type":"device type: HDD or SSD now"
              "tests done":count, - how many smart test are in log
              "tests failed":count, - and how many failed
         }
         <attributes_topic> - May contain JSON packed attributes here if topic defined in .ini
             id:{ "name":"...", "value":"...", "raw":"..." }
         <power_on_time> - lifetime hours (smart)
-        <type> - "SSD" or "HDD" (guess on smart data)
         <temperature> - degrees of C (smart)
         <error_log_topic> - JSON of raw error log entries (smart)
             { lifetime_hours:"error_description", ...  }
@@ -50,11 +52,12 @@ import time
 
 
 #############################################################
-def handle_termination(signum, frame) -> None:
+def handle_termination(*_) -> None:
     """
     Tries to gracefully exit in case of problems
-    :param signum: UNUSED
-    :param frame: UNUSED
+
+    param signum: UNUSED
+    param frame: UNUSED
     :return: None
     """
     if sender:
@@ -67,6 +70,7 @@ def handle_termination(signum, frame) -> None:
 def load_config(c_file: str, default_path: str) -> None:
     """
     Loads .ini and may do some initializing of defaults
+
     :param c_file: str. Path to .ini file
     :param default_path: str. Last resort to find .ini
     :return: None
@@ -104,6 +108,7 @@ def load_config(c_file: str, default_path: str) -> None:
 def spawn_sender() -> None:
     """
     (Re)spawns process that actually sends mqtt messages to server
+
     :return: None
     """
     global args, config, sender
@@ -112,7 +117,7 @@ def spawn_sender() -> None:
         print("+ Spawning sender process:", config['sender'], file=sys.stderr)
 
     sender = subprocess.Popen(shlex.split(config['sender']), bufsize=1,
-                              # default bufsize may gobble a whole loop of data and do nothing till the next
+                              # default buf size may gobble a whole loop of data and do nothing till the next
                               stdin=subprocess.PIPE,
                               stdout=None if args.debug or config['sender'].find('--debug')
                               else subprocess.STDOUT,
@@ -133,6 +138,7 @@ def spawn_sender() -> None:
 def send_message_raw(msg: str) -> None:
     """
     Sends another message to the spawned mqtt agent
+
     :param msg: string. sent as is
     :return: None
     """
@@ -187,6 +193,7 @@ def send_message_raw(msg: str) -> None:
 def send_message(*in_msg) -> None:
     """
     Sends another message to the spawned mqtt agent
+
     :param in_msg: list of strings: parts of the message
     :return: None
     """
@@ -202,6 +209,7 @@ def send_message(*in_msg) -> None:
 def send_long(topic, *msg) -> None:
     """
     Sends complex message to the mqtt agent
+
     :param topic: topic name
     :param msg: list of strings
     :return: None
@@ -219,6 +227,7 @@ def send_long(topic, *msg) -> None:
 def send_short(topic, *msg) -> None:
     """
     Posts a (short) message to a single topic
+
     :param topic: str. topic name
     :param msg: str list
     :return: 
@@ -230,6 +239,7 @@ def send_short(topic, *msg) -> None:
 def get_mounts() -> None:
     """
     Collects linux mounted volumes information and put it into mounts[] list
+
     :return: None
     """
     global args, config, mounts, sender
@@ -253,6 +263,7 @@ def get_mounts() -> None:
 def nested_keys_exists(in_hash, *keys) -> bool:
     """
     Will check if _all_ nested keys exists in dict
+
     :param in_hash: top-level dict
     :param keys: array of sub-keys to dive into
     :returns True if path is valid
@@ -260,7 +271,7 @@ def nested_keys_exists(in_hash, *keys) -> bool:
     sub_hash = in_hash
 
     for key in keys:
-        if not key in sub_hash:
+        if key not in sub_hash:
             return False
 
         sub_hash = sub_hash[key]
@@ -274,6 +285,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
     This routine will parse the JSON formatted output from smartctl
     and will send processed stuff to the mqtt topics hierarchy (see top of file for explanation)
     NOTE: The combined state analysis will be posted in do_smartctl() final
+
     :param sctl_output_text: raw smartctl output
     :param ret: returns the parsed data here - see do_smartctl for details
     :param device_topic: name of mqtt topics base for reports
@@ -292,13 +304,15 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 
     if sctl_json["json_format_version"][0] != 1 and sctl_json["json_format_version"][1] != 0:
         ret["warnings"].append("Newer smartctl report version!")
-        ret["warnings_count"] += 1
+        ret["warnings count"] += 1
 
-    ret["model"] = sctl_json["model_name"] + ", S/N: " + sctl_json["serial_number"]
+    ret["model"] = sctl_json["model_name"]
+    ret["serial"] = sctl_json["serial_number"]
+    ret["id"] = sctl_json["model_name"] + " " + sctl_json["serial_number"]
 
     model_flags = sctl_json["model_name"].replace(" ", "")
     if model_flags in config:
-        model_flags = config[model_flags].replace(" ", "").split(",")
+        model_flags = config[model_flags].replace(" ", "").split("|")
     else:
         model_flags = []
 
@@ -309,7 +323,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 
     ret["temperature"] = int(sctl_json["temperature"]["current"]) if "temperature" in sctl_json else -1
 
-    ret["power_on_time"] = int(sctl_json["power_on_time"]["hours"]) if "power_on_time" in sctl_json else -1
+    ret["power on time"] = int(sctl_json["power_on_time"]["hours"]) if "power_on_time" in sctl_json else -1
 
     sctl_attr_table = sctl_json["ata_smart_attributes"]["table"]
 
@@ -343,7 +357,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 
                 if err_or_warn_section != "":
                     ret[err_or_warn_section].append(msg)
-                    ret[err_or_warn_section + "_count"] += 1
+                    ret[err_or_warn_section + " count"] += 1
 
         # ----------------------------------------
         # Looking at the specific attributes here:
@@ -354,8 +368,8 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 
         #  9 Power_On_Hours          0x0032   099   099   000    Old_age   Always       -       915 (222 63 0)
         # we'll use it to check if the tests are fresh enough
-        elif ret["power_on_time"] == -1 and sctl_attr["id"] == 9:
-            ret["power_on_time"] = int(sctl_attr["value"])
+        elif ret["power on time"] == -1 and sctl_attr["id"] == 9:
+            ret["power on time"] = int(sctl_attr["value"])
 
     if post_data:
         send_long(device_topic + '/' + config["attributes_topic"], "{\n", ",\n  ".join(post_data), "\n}")
@@ -365,7 +379,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
     # =============================================================
     # In this section we will check the error log for fresh entries
 
-    if nested_keys_exists(sctl_json, "ata_smart_error_log", "summary", "logged_count" ) \
+    if nested_keys_exists(sctl_json, "ata_smart_error_log", "summary", "logged_count") \
             and sctl_json["ata_smart_error_log"]["summary"]["logged_count"] > 0:
 
         if "error_log_topic" in config:  # we'll extract shorter attributes list for posting into separate topic
@@ -374,7 +388,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
             post_data = None
 
         for elog in sctl_json["ata_smart_error_log"]["summary"]["table"]:
-            if ret["power_on_time"] < elog["lifetime_hours"] + int(config["max_error_nag_hours"]):
+            if ret["power on time"] < elog["lifetime_hours"] + int(config["max_error_nag_hours"]):
                 err_or_warn_section = "errors"  # still fresh
             else:
                 err_or_warn_section = "warnings"  # to not lose them at all
@@ -385,7 +399,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
                 msg += ", CMD: " + elog["previous_commands"][0]["command_name"]
 
             ret[err_or_warn_section].append(msg)
-            ret[err_or_warn_section + "_count"] += 1
+            ret[err_or_warn_section + " count"] += 1
 
             if post_data:
                 post_data.append(str(elog["lifetime_hours"]) + ':"'
@@ -454,9 +468,9 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         short_tests_status = ""
 
         if "short_test_log_time" in model_flags:  # if test log time is stored as uint16
-            lifetime = ret["power_on_time"] % 65536
+            lifetime = ret["power on time"] % 65536
         else:
-            lifetime = ret["power_on_time"]
+            lifetime = ret["power on time"]
 
         if last_short_test_age == 0:
             short_tests_status = " and SHORT tests was NEVER run"
@@ -501,17 +515,20 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 def do_smartctl(device: str, device_topic: str) -> dict:
     """
     Collects data from smartctl. Run parser. Post basic data.
+
     :param device: path to the device file
     :param device_topic: root topic for this device
     :return: hash made by process_sctl_json() or other low-level data processor
     """
     global args, config
 
-    ret = {
-        "errors_count": 0,    # total number of error conditions encountered
+    ret = {  # pre-init and show what we want to get from smartctl
+        "errors count": 0,    # total number of error conditions encountered
         "errors": [],         # array of detected errors as strings
-        "model": "",          # model name + serial number. if this is empty string then we had problems with json
-        "power_on_time": -1,  # hours
+        "id": "",             # unique id. model name + serial number
+        "model": "",          # model name. if this is empty string then we had problems with json
+        "power on time": -1,  # hours
+        "serial": "",         # serial number
         "status": "",
         "temperature": -1,
         "testing status": "",  # a summary for testing procedures
@@ -519,13 +536,19 @@ def do_smartctl(device: str, device_topic: str) -> dict:
         "tests failed": 0,
         "tests inconclusive": 0,  # some tests may have been interrupted and pass status is not available
         "type": "",           # "HDD" or "SSD" - loosely based on TRIM support and rotation speed
-        "warnings_count": 0,  # total number of warning conditions encountered
+        "warnings count": 0,  # total number of warning conditions encountered
         "warnings": [],       # array of all warning conditions in string form
     }
 
+    # preparing smartctl parameters:
     params = shlex.split(config["smartctl"])
     params.append("-a")
     params.append("-j")
+
+    # looking if there are specific smartctl switches to add
+    for f in devices_cache[device]["scopts"]:
+        params.append(f)
+
     params.append("/dev/" + device)
     sctl = subprocess.Popen(params, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
@@ -560,14 +583,16 @@ def do_smartctl(device: str, device_topic: str) -> dict:
 ########################################
 def check_storage_sd() -> None:
     """
-    This function will prepare for checking another drive.
+    This function will:
+    Make preparations like drives list and pre-flight.
     Calls configured data collector's drivin routine(s),
-    consolidates information about reported problems and posts to device's root topic
-    See the beginning of file for topics structure
+    Consolidates information about reported problems and posts to device's root topic
+
+    Consult the beginning of this script for topics structure
 
     :return: None
     """
-    global args, config
+    global args, config, devices_cache
 
     #  for cygwin we can filter out real drives like this
     cygwin_real_drives = {}
@@ -587,12 +612,17 @@ def check_storage_sd() -> None:
         if args.debug:
             print("+ device:", device, file=sys.stderr)
 
-        # check if it is ata one:
+        # check if it is ata one. Currently, seen variants:
+        #   onboard:    /devices/pci0000:00/0000:00:12.0/ata1/host0/target0:0:0/0:0:0:0/block/sda
+        #   addon card: /devices/pci0000:00/0000:00:14.0/0000:02:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sdc
+        #   USB drive:  /devices/pci0000:00/0000:00:15.0/usb2/2-2/2-2:1.0/host4/target4:0:0/4:0:0:0/block/sde
+        # NOTE: reading major # from /sys/class/block/sd?/dev being a tad untidy as I think,
+        #       but I have no SCSI drives to look at.
         if sys.platform.startswith("linux"):
-            rm = re.search(r"/devices/pci[^/]+/[^/]+/ata\d+", os.readlink("/sys/class/block/" + device))
+            rm = re.search(r"/devices/pci.+/ata\d+/host\d+/", os.readlink("/sys/class/block/" + device))
             if not rm:
                 if args.debug:
-                    print("- not an ATA", file=sys.stderr)
+                    print("- not an SCSI/ATA", file=sys.stderr)
                 continue
 
         elif sys.platform.startswith("cygwin"):
@@ -610,7 +640,30 @@ def check_storage_sd() -> None:
         state = []  # we'll try to determine it by any test enabled
         severity = 0  # how bad troubles are. 0-OK, 1-warn, >1 - crit
 
-        # doing nagios's check_ide_smart run if configured
+        if device not in devices_cache:
+            devices_cache[device] = dict()
+
+        dc = devices_cache[device]
+
+        # looking if there are specific model options
+        if "model flags" not in dc:  # retrieving
+            dc["model flags"] = []  # misc flags
+            dc["scopts"] = []       # smartctl options if any
+
+            try:
+                dc["model"] = open("/sys/block/" + device + "/device/model").readline()
+                m = dc["model"].replace(" ", "")
+
+                if m in config:
+                    for f in config[m].split("|"):
+                        if f[1:6] == "scopt=":
+                            dc["scopts"].append(f[7:])
+                        else:
+                            dc["model flags"].append(f)
+            except FileNotFoundError:  # cygwin has no /sys
+                dc["model"] = "_"
+
+        # doing nagios's check_ide_smart run if configured. it is really simple.
         if "check_ide_smart" in config:
             checks_run += 1
             params = shlex.split(config["check_ide_smart"])
@@ -628,44 +681,38 @@ def check_storage_sd() -> None:
         # doing smartctl run if configured
         if "smartctl" in config:
             checks_run += 1
-            sctl = do_smartctl(device, device_topic)
+            sctl_data = do_smartctl(device, device_topic)
 
-            if sctl["model"] == "UNKNOWN":
+            if sctl_data["model"] == "UNKNOWN":
                 if args.debug:
                     print("! smartctl failed to fetch data for:", device, file=sys.stderr)
 
                 continue
 
-            if sctl["testing status"] != "OK":  # failed or not running tests detected
+            if sctl_data["testing status"] != "OK":  # failed or not running tests detected
                 checks_with_errors += 1
                 severity += 1
 
-                state.append("testing status: " + sctl["testing status"])
+                state.append("testing status: " + sctl_data["testing status"])
 
-            msg = '{ "model":"' + sctl["model"] + '", "status":"' + sctl["status"] + '",\n' \
-                  + '"tests done":' + str(sctl["tests done"]) \
-                  + ', "tests failed":' + str(sctl["tests failed"]) \
-                  + ', "tests inconclusive":' + str(sctl["tests inconclusive"]) \
-                  + ', "checks run":' + str(checks_run) \
-                  + ', "checks with errors":' + str(checks_with_errors) \
-                  + " }"
+            msg = json.dumps(sctl_data, skipkeys=True, separators=(',\n', ': '))
 
-            if sctl["tests failed"] > 0:
-                state.append(str(sctl["tests failed"]) + " of " + str(sctl["tests done"])
+            if sctl_data["tests failed"] > 0:
+                state.append(str(sctl_data["tests failed"]) + " of " + str(sctl_data["tests done"])
                              + " recent tests failed!")
                 severity += 1
 
-            if sctl["tests inconclusive"] > 0:
-                state.append(str(sctl["tests inconclusive"]) + " latest tests were not finished!")
+            if sctl_data["tests inconclusive"] > 0:
+                state.append(str(sctl_data["tests inconclusive"]) + " latest tests were not finished!")
                 severity += 0.2
 
-            if sctl["status"] != "OK":  # e.g. some value went below threshold - pre-fail state at least
-                state.append(sctl["status"])
+            if sctl_data["status"] != "OK":  # e.g. some value went below threshold - pre-fail state at least
+                state.append(sctl_data["status"])
                 severity += 2
 
             send_long(device_topic, msg)
 
-            send_short(device_topic + "/" + config["temperature_topic"], str(sctl["temperature"]))
+            send_short(device_topic + "/" + config["temperature_topic"], str(sctl_data["temperature"]))
 
         if checks_run > 0:  # so we got something meaningful to report here
             if severity == 0:
@@ -690,7 +737,7 @@ def check_storage() -> None:
 
 
 ####################################################
-global config_full, dates_json, root_topic, sender
+global config_full, dates_json, devices_cache, root_topic, sender
 
 # This is the list of known attributes where warning should be produced on val exceed threshold
 # True when val < thresh is bad, False when val > threshold is bad
@@ -709,7 +756,7 @@ config_path = "/etc/smarthome/reporters/reporters.ini"  # default
 
 parser = argparse.ArgumentParser(
     description="Collect state info from the storage and post it to mqtt.\n"
-                "V2.001. Copyright (c) 2021+ by Andrej Pakhutin")
+                "V2.010. Copyright (c) 2022+ by Andrej Pakhutin")
 parser.add_argument("-c", "--config", dest="config_path", action="store", default=config_path,
                     help="path to a non-default (" + config_path + ") config file")
 parser.add_argument("-d", "--debug", dest="debug", action="store_true", default=False, help="debug mode")
@@ -733,6 +780,7 @@ spawn_sender()
 
 queue = []
 mounts = dict()
+devices_cache = dict()
 
 if args.action != "":
     queue.append(args.action)

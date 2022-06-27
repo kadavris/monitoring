@@ -41,9 +41,16 @@ temperature_topic = temperature
 ; warn if test were not done for this amount of hours ( default is 7 days = 168 hours )
 ;max_tests_age = 168
 
+; if your controller is weird or just USB to ATA, then you may want to provide
+; some additional options to smartctl like this:
+<modelname> = <option>[|<option>]... - additional model-specific options
+;             look up model name in /sys/block/sd?/device/model. Spaces will be removed on lookup!
+;             To specify additional smartctl parameter,
+;             use 'scopt=<single smartctl option>' syntax
+
 ; This is individual drive model settings:
 ; The format of key name is drive model, as reported by smartctl, but without spaces
-; The flags in list should be separated by commas:
+; The flags in list should be separated by the pipe "|" symbol:
 ;    no_tests_log - if you have the drive like intel 520 series that does not provide tests log at all
 ;    short_test_log_time - Spotted on my WD AV-GP: When lifetime in test log is 2byte
 ;                          and reported as remainder of "Power On hours" division by 65536

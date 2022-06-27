@@ -2,7 +2,7 @@
 You can configure it to use nagios **check_ide_smart** and/or **smartctl**.  
 Use of smartctl will provide much more comprehensive data to gaze upon and analyze.  
 
-Tested under Fedora Linux and Windows 10  
+Tested under Fedora Linux and Cygwin under Windows 10+  
 Requires python3, smartctl and/or nagios's check_ide_smart plugin  
 
 Directories:
@@ -43,15 +43,17 @@ JSON, high-level analysis of drive's state going here:
      "checks with errors":count - and how many are failed
      
      NOTE: these are from smartctl only:
-     "model":"device model + S/N",
+     "id":"unique id: device model + S/N",
+     "model":"device model",
+     "serial":"S/N",
      "tests done":count, - how many S.M.A.R.T test are in log
      "tests failed":count, - and how many failed
      "tests inconclusive":count, - the count of latest, unfinished tests
+     "type":"HDD" or "SSD" now (guess on S.M.A.R.T data)
 }
 ```
 Then there are topics dedicated to bear specific bits of data, that should be available without the need of parsing:
 * `<power_on_time>` - device lifetime hours (S.M.A.R.T)
-* `<type>` - "SSD" or "HDD" (guess on S.M.A.R.T data)
 * `<temperature>` - degrees of Celsius (S.M.A.R.T)
 * `<state_topic>` - nagios-like: "OK", "WARNING", "CRITICAL"
 * `<updated_topic>` - When this device's hierarchy was last updated:
