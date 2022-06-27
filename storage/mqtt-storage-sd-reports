@@ -316,10 +316,13 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
     else:
         model_flags = []
 
-    if ("trim" in sctl_json) and sctl_json["trim"]["supported"]:
-        ret["type"] = "SSD"
+    if nested_keys_exists(sctl_json, "device", "type") and sctl_json["device"]["type"] == "nvme":
+            ret["type"] = "NVMe"
     else:
-        ret["type"] = "HDD"
+        if ("trim" in sctl_json) and sctl_json["trim"]["supported"]:
+            ret["type"] = "SSD"
+        else:
+            ret["type"] = "HDD"
 
     ret["temperature"] = int(sctl_json["temperature"]["current"]) if "temperature" in sctl_json else -1
 
@@ -737,6 +740,21 @@ def check_storage() -> None:
 
 
 ####################################################
+def set_config_default(key: str, val) -> None:
+    """
+    Initializes defaults in config
+
+    :param key: key to look for
+    :param val: default value to set
+    :return: None
+    """
+    global config
+    
+    if key not in config:
+        config[key] = str(val)
+
+
+####################################################
 global config_full, dates_json, devices_cache, root_topic, sender
 
 # This is the list of known attributes where warning should be produced on val exceed threshold
@@ -788,11 +806,9 @@ else:
     queue = [check_storage]
 
 #  Set some defaults:
-if "max_error_nag_hours" not in config:
-    config["max_error_nag_hours"] = str(24 * 10)
-
-if "max_tests_age" not in config:
-    config["max_tests_age"] = str(7 * 24)
+set_config_default("max_error_nag_hours", 24 * 10)
+set_config_default("max_inactivity", 10 * 60)
+set_config_default("max_tests_age", 7 * 24)
 
 while True:
     dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
