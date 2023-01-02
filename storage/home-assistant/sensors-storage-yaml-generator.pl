@@ -47,6 +47,8 @@ print "Generating:";
 
 for my $host ( keys( %$config ) )
 {
+  next if $host eq '_';
+
   print "\n$host: ";
 
   print $yaml_mqtt_h $separator, "# host: $host", $separator;
@@ -72,16 +74,22 @@ for my $host ( keys( %$config ) )
   state_topic: "sys/$host/hw/storage/$d/state"
   json_attributes_topic: "sys/$host/hw/storage/$d"
 
-# json
+# json of smart attr. may be not present
 - name: "$host: $d attributes"
-  state_topic: "sys/$host/hw/storage/$d"
-  json_attributes_topic: "sys/$host/hw/storage/$d"
+  state_topic: "sys/$host/hw/storage/$d/attributes"
+  json_attributes_topic: "sys/$host/hw/storage/$d/attributes"
 
-# model/SN
+- name: "$host: $d id"
+  state_topic: "sys/$host/hw/storage/$d"
+  value_template: "{{ state_attr( 'sensor.${host}_${d}', 'id' ) }}"
+
 - name: "$host: $d model"
   state_topic: "sys/$host/hw/storage/$d"
-  json_attributes_topic: "sys/$host/hw/storage/$d"
-  value_template: "{{ value_json.model }}"
+  value_template: "{{ state_attr( 'sensor.${host}_${d}', 'model' ) }}"
+
+- name: "$host: $d type"
+  state_topic: "sys/$host/hw/storage/$d"
+  value_template: "{{ state_attr( 'sensor.${host}_${d}', 'type' ) }}"
 
 - name: "$host: $d temperature"
   state_topic: "sys/$host/hw/storage/$d/temperature"
@@ -120,8 +128,8 @@ for my $host ( keys( %$config ) )
 
 - platform: template
   sensors:
-    ${host}_${d}_state:
-      friendly_name: "${host}: ${d} state"
+    ${host}_${d}_problems:
+      friendly_name: "${host}: ${d} problems"
       value_template: >-
         {% if states( 'sensor.${host}_${d}_freshness' ) != "OK" %}
           {{ states( 'sensor.${host}_${d}_freshness' ) }}
@@ -130,9 +138,16 @@ for my $host ( keys( %$config ) )
             {{ states( 'sensor.${host}_${d}_mqtt_state' ) }}
           {% endif %}
           {% if states( 'sensor.${host}_${d}_temperature' ) != 'UNKNOWN' %}
-            {% if states( 'sensor.${host}_${d}_temperature' )|float > 42 %}
-              OVERHEATING: {{ states( 'sensor.${host}_${d}_temperature' ) }}
-              ( {{ states( 'sensor.${host}_${d}_model' ) }} )
+            {% if states( 'sensor.${host}_${d}_type' ) == 'HDD' %}
+              {% if states( 'sensor.${host}_${d}_temperature' )|float > $hdd_overheat %}
+                OVERHEATING: {{ states( 'sensor.${host}_${d}_temperature' ) }}
+                ( {{ states( 'sensor.${host}_${d}_id' ) }} )
+              {% endif %}
+            {% else %}
+              {% if states( 'sensor.${host}_${d}_temperature' )|float > $ssd_overheat %}
+                OVERHEATING: {{ states( 'sensor.${host}_${d}_temperature' ) }}
+                ( {{ states( 'sensor.${host}_${d}_id' ) }} )
+              {% endif %}
             {% endif %}
           {% endif %}
         {% endif %}
