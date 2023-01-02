@@ -13,7 +13,14 @@ use Config::Tiny;
 # Open the config
 my $config = Config::Tiny->read( 'sensors-storage-yaml-generator.ini', 'utf8' );
 
-# my $rootproperty = $Config->{_}->{rootproperty};
+my $hdd_overheat = 49;
+my $ssd_overheat = 60;
+
+if( exists( $config->{_} ) )
+{
+    exists( $config->{_}->{ 'hdd_overheat' } ) and $hdd_overheat = $config->{_}->{ 'hdd_overheat' };
+    exists( $config->{_}->{ 'ssd_overheat' } ) and $ssd_overheat = $config->{_}->{ 'ssd_overheat' };
+}
 
 my $yaml_mqtt_file = 'inc/mqtt/sensor/mqtt-sensor-storage-autogen.yaml';
 my $yaml_sensors_file = 'inc/sensor/sensor-storage-autogen.yaml';

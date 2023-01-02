@@ -1,0 +1,15 @@
+* reporters.ini.variables
+** Section: [storage]
+
+*** Variables for root_topic.
+- $$host: This host (short) name. E.g. 'homeserver'.
+- $$fchost: hostname.domain if available
+
+*** Variables for device_topic.
+The values will be normalized to adhere to allowed character set.
+Notably, the spaces will be replaced by underscores, etc.
+
+- $$device: Will be substituted with the device's name without /dev/ prefix. E.g. 'sda'
+- $$model: Current device's model name
+- $$serial:  Current device's serial number
+
