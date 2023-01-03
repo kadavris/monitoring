@@ -442,13 +442,13 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 
             # test record may lack "passed" attribute if test has been interrupted.
             # we'll not count this at all, but report inconclusive if it is the latest one(s)
-            if tlog["type"]["value"] == 2:  # only long ones count
-                if "passed" not in tlog["status"]:
+            if "passed" not in tlog["status"]:
+                if tlog["type"]["value"] == 2:  # only long ones count
                     if last_inconclusive:
                         ret["tests inconclusive"] += 1
-                    continue
-                else:
-                    last_inconclusive = False
+                continue
+            else:
+                last_inconclusive = False
 
             test_date = tlog["lifetime_hours"]
 
@@ -749,7 +749,7 @@ def set_config_default(key: str, val) -> None:
     :return: None
     """
     global config
-    
+
     if key not in config:
         config[key] = str(val)
 
