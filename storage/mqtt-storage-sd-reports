@@ -285,6 +285,8 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
     This routine will parse the JSON formatted output from smartctl
     and will send processed stuff to the mqtt topics hierarchy (see top of file for explanation)
     NOTE: The combined state analysis will be posted in do_smartctl() final
+    NOTE2: post_data is re-used to post large raw chunks of intermediate data to MQTT.
+           E.g. attributes array if attributes_topic is configured
 
     :param sctl_output_text: raw smartctl output
     :param ret: returns the parsed data here - see do_smartctl for details
@@ -699,6 +701,14 @@ def check_storage_sd() -> None:
                 state.append("testing status: " + sctl_data["testing status"])
 
             msg = json.dumps(sctl_data, skipkeys=True, separators=(',\n', ': '))
+
+            if sctl_data["errors count"] > 0:
+                state.append("Has " + str(sctl_data["errors count"]) + " current errors!")
+                severity += sctl_data["errors count"] + 1
+
+            if sctl_data["warnings count"] > 0:
+                state.append("Has " + str(sctl_data["warnings count"]) + " current warnings.")
+                severity += sctl_data["warnings count"] / 2
 
             if sctl_data["tests failed"] > 0:
                 state.append(str(sctl_data["tests failed"]) + " of " + str(sctl_data["tests done"])
