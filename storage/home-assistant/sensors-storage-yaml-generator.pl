@@ -64,6 +64,7 @@ for my $host ( keys( %$config ) )
 
     my $d = 'sd' . $drive;
 
+    # ouputting raw mqtt input points
     print $yaml_mqtt_h qq~
 # $d
 
@@ -103,6 +104,8 @@ for my $host ( keys( %$config ) )
   value_template: "{{ value_json.timestamp }}"
 ~;
 
+# outputting interpreted data for sensors values
+
 # NOTE:
 # There is expire_after <seconds> attribute for mqtt sensor
 # that we can use to check if data is fresh: state will be 'unavailable' if stale
@@ -125,7 +128,10 @@ for my $host ( keys( %$config ) )
         {% else %}
           mdi:harddisk
         {% endif %}
+~;
 
+    # here goes visual representation for dashboard
+    print $yaml_sensors_h qq~
 - platform: template
   sensors:
     ${host}_${d}_problems:
