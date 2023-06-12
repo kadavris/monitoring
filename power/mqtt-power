@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-# This script produces reports on electrical power and push it into mqtt.
-# repo is in github.com/kadavris
+"""
+ This script produces reports on electrical power and push it into mqtt.
+ repo is in github.com/kadavris
+ assumed topic structure:
+     power
+         <dev_id> - {"model":"...", "errors":"...", "attribute1":"..."...}
+            state_topic... - one-line state message
+            updated - json: { "date":"human-readable date", timestamp:UNIXTS }
+"""
 import argparse
 import configparser
 import os
@@ -15,7 +22,13 @@ import time
 
 
 #############################################################
-def handle_termination(signum, frame):
+def handle_termination(signum, frame) -> None:
+    """
+    Will (safely) handle termination. Stopping sender agend on its rails.
+    :param signum: unused
+    :param frame: unused
+    :return: None
+    """
     if args.debug:
         print("! signal caught. exiting.", file=sys.stderr)
 
@@ -26,8 +39,13 @@ def handle_termination(signum, frame):
 
 
 #############################################################
-def load_config(c_file):
-    global args, config
+def load_config(c_file: str) -> None:
+    """
+    Will load configuration file, checking for problems beforehand
+    :param c_file: path to config file
+    :return: None
+    """
+    global args, config, global_config
 
     file = c_file
 
@@ -44,28 +62,33 @@ def load_config(c_file):
     if args.debug:
         print("+ Loading config:", file)
 
-    config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
-    config.read(file)
+    global_config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
+    global_config.read(file)
+    config = global_config['power']
 
 
 ########################################
-def spawn_sender():
+def spawn_sender() -> None:
+    """
+    Will spawn sender process, checking for various problems
+    :return: None
+    """
     global args, config, sender
 
     if args.debug:
-        print("+ Spawning sender process:", config['power']['sender'], file=sys.stderr)
+        print("+ Spawning sender process:", config['sender'], file=sys.stderr)
 
-    sender = subprocess.Popen(shlex.split(config['power']['sender']), bufsize=1,
-                              # default bufsize may gobble a whole loop of data and do nothing till the next
+    # default bufsize may gobble a whole loop of data and do nothing till the next
+    sender = subprocess.Popen(shlex.split(config['sender']), bufsize=1,
                               stdin=subprocess.PIPE,
-                              stdout=(None if args.debug or config['power']['sender'].find('--debug')
+                              stdout=(None if args.debug or config['sender'].find('--debug')
                                       else subprocess.DEVNULL),
-                              stderr=(None if args.debug or config['power']['sender'].find('--debug')
+                              stderr=(None if args.debug or config['sender'].find('--debug')
                                       else subprocess.DEVNULL),
                               text=True)
 
     if not sender:
-        print('? ERROR running ', config['power']['sender'], file=sys.stderr)
+        print('? ERROR running ', config['sender'], file=sys.stderr)
         sys.exit(1)
 
     if sender.poll():  # poll() return None if process is still there
@@ -76,8 +99,13 @@ def spawn_sender():
 
 
 ########################################
-def send_message(*msg):
-    global args, config, sender
+def send_message(*msg) -> None:
+    """
+    Will send new message to the MQTT using sender process connection
+    :param msg: list of message parts to send
+    :return: None
+    """
+    global args, sender
 
     try_number = 1
     while True:
@@ -110,9 +138,17 @@ def send_message(*msg):
 
 
 ########################################
-# will update stats[ device ] with minute, hour or day depending on prefix
-# now it sums values for simple mean calculation
-def update_stats(device, prefix, time_value, voltage, freq):
+def update_stats(device: str, prefix: str, time_value: float, voltage: float, freq: float) -> None:
+    """
+    Will update stats[ device ] with minute, hourly or daily values depending on prefix.
+    Currently, it sums values for simple mean calculation
+    :param device: str: device path
+    :param prefix: str: 'm'/'h'/'d'
+    :param time_value: float: timestamp
+    :param voltage: float
+    :param freq: float: frequency
+    :return: None
+    """
     global stats
 
     if stats[device][prefix + 'start'] != time_value: # new time period?
@@ -131,26 +167,51 @@ def update_stats(device, prefix, time_value, voltage, freq):
 
 
 ########################################
-# collects data from upsc output for given device.
-# return hash: { model:model+s/n, smart:attributes json, temperature }
-def get_upsc_output(device):
+def get_model_specific_config(device: str, keyword: str, default: str = "") -> str:
+    """
+    Return the value of model-specific setting from config.
+    :param device: str. NUT ID of UPS device
+    :param keyword: str. Attribute/keyword name
+    :param default: str. Default value to return if not found
+    :return: str. The value
+    """
+    global config, global_config
+
+    specific_section = "power." + device
+    if specific_section in global_config:
+        if keyword in global_config[specific_section]:
+            return global_config[specific_section][keyword]
+    elif keyword in config:
+        return config[keyword]
+    else:
+        return default
+
+########################################
+def get_upsc_output(device: str) -> dict:
+    """
+    Collects data from upsc output for given device.
+    :param device:
+    :return: dict("model":"manufacturer model", "data":dict(attribute:val))
+    """
     global args, config, stats
 
-    ret = {"model": "UNKNOWN", "errors": ''}
+    to_return = {"model": "UNKNOWN", "errors": ''}
 
-    need = [  # minimal attributes needed (note '.' replaced by '_')
+    # initializing the list of minimal attributes that we needed (note '.' replaced by '_')
+    upsc_data_needed = [
         'device_mfr',  # device.mfr: EATON
         'device_model',  # device.model: 5E 1500i
         'device_type',  # device.type: ups
         'ups_status',  # ups.status: OL
     ]
 
-    if 'bulk_report' in config['power']:
-        ret['bulk_report'] = config['power'].get('bulk_report').split()
-        need += ret['bulk_report']
+    # adding user-defined properties
+    if 'bulk_report' in config:
+        to_return['bulk_report'] = config.get('bulk_report').split()
+        upsc_data_needed += to_return['bulk_report']
 
-    ret['need'] = need
-    ret['data'] = {}
+    to_return['need'] = upsc_data_needed  # indicating what we intended to collect here
+    to_return['data'] = dict()  # attributes values will be here
 
     upsc = subprocess.Popen(['upsc', device],
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -158,200 +219,208 @@ def get_upsc_output(device):
 
     if upsc.poll():
         if upsc.returncode > 0:
-            ret["errors"] = '"upsc error":"ended with rc: ' + str(upsc.returncode) + '"'
-            print(ret["errors"])
-        return ret
+            to_return["errors"] = '"upsc error":"ended with rc: ' + str(upsc.returncode) + '"'
+            print(to_return["errors"])
+        return to_return
 
     out, err = upsc.communicate()  # communicate() will return all output at once
     if err and (err != ''):
-        ret["errors"] = '"upsc error":"' + err + "'"
-        print(ret["errors"])
-        return ret
+        to_return["errors"] = '"upsc error":"' + err + "'"
+        print(to_return["errors"])
+        return to_return
 
     for report_line in out.splitlines():
-        # attributes array
+        # attributes array?
         rm = re.match(r'([\w.]+):\s+(.+)', report_line)
         if not rm:
             continue
 
         attribute_name = rm.group(1).replace('.', '_')
-        value = rm.group(2)
+        value = rm.group(2).strip()
 
         attribute_name.replace('.', '_')
 
-        if attribute_name not in need:
+        if attribute_name not in upsc_data_needed:
             continue
 
-        ret['data'][attribute_name] = value
+        to_return['data'][attribute_name] = value
 
         # fill in specials:
-        if attribute_name == 'device_mfr':  # ups.mfr: EATON
-            ret['model'] = "Model: " + value
-        elif attribute_name == 'device_model':  # ups.model: 5E 1500i
-            ret['model'] += ' ' + value
+        if attribute_name == 'device_mfr':  # device.mfr: EATON. Some UPS report empty string here
+            to_return['model'] = "Model: "
+            if value != "":
+                to_return['model'] += value
+            else:
+                to_return['model'] += get_model_specific_config(device, ".mfr", "UNSPECIFIED")
+        elif attribute_name == 'device_model':  # device.model: 5E 1500i
+            if value != "":
+                to_return['model'] += ' ' + value
+            else:
+                to_return['model'] += ' ' + get_model_specific_config(device, ".model", "")
 
     # do some stats
     try:
         t = time.localtime()
 
-        v = float(ret['data']['input_voltage'])
-        f = float(ret['data']['input_frequency']) if 'input_frequency' in ret['data'] else 0
+        v = float(to_return['data']['input_voltage'])
+        f = float(to_return['data']['input_frequency']) if 'input_frequency' in to_return['data'] else 0
         if f == 0:
-            f = float(ret['data']['output_frequency']) if 'output_frequency' in ret['data'] else 0
+            f = float(to_return['data']['output_frequency']) if 'output_frequency' in to_return['data'] else 0
 
         if device not in stats:  # init
             stats[device] = {
-                'mstart': 0, 'm_v_mean': v, 'mv': v, 'mf': f, 'm_f_mean': f, 'msamples': 1, # minute
-                'hstart': 0, 'h_v_mean': v, 'hv': v, 'hf': f, 'h_f_mean': f, 'hsamples': 1, # hour
-                'dstart': 0, 'd_v_mean': v, 'dv': v, 'df': f, 'd_f_mean': f, 'dsamples': 1  # day
+                'mstart': 0, 'm_v_mean': v, 'mv': v, 'mf': f, 'm_f_mean': f, 'msamples': 1,  # minute
+                'hstart': 0, 'h_v_mean': v, 'hv': v, 'hf': f, 'h_f_mean': f, 'hsamples': 1,  # hour
+                'dstart': 0, 'd_v_mean': v, 'dv': v, 'df': f, 'd_f_mean': f, 'dsamples': 1   # day
             }
 
         update_stats(device, 'm', t.tm_min, v, f)
         update_stats(device, 'h', t.tm_hour, v, f)
         update_stats(device, 'd', t.tm_mday, v, f)
 
-        ret['data']['voltage_mean_minute'] = stats[device]['m_v_mean']
-        ret['data']['frequency_mean_minute'] = stats[device]['m_f_mean']
+        to_return['data']['voltage_mean_minute'] = stats[device]['m_v_mean']
+        to_return['data']['frequency_mean_minute'] = stats[device]['m_f_mean']
 
-        ret['data']['voltage_mean_hour'] = stats[device]['h_v_mean']
-        ret['data']['frequency_mean_hour'] = stats[device]['h_f_mean']
+        to_return['data']['voltage_mean_hour'] = stats[device]['h_v_mean']
+        to_return['data']['frequency_mean_hour'] = stats[device]['h_f_mean']
 
-        ret['data']['voltage_mean_day'] = stats[device]['d_v_mean']
-        ret['data']['frequency_mean_day'] = stats[device]['d_f_mean']
+        to_return['data']['voltage_mean_day'] = stats[device]['d_v_mean']
+        to_return['data']['frequency_mean_day'] = stats[device]['d_f_mean']
     except:
         pass
 
-    return ret
+    return to_return
 
 
 ########################################
-# This function will check upsd/nut status
-def check_nut():
+def check_nut() -> None:
+    """
+    Will analyze upsc output and send the data to MQTT.
+    Default function to run on invocation of this script.
+    :return: None
+    """
     global args, config, log_items, sender, stats
 
-    cf = config['power']
-
-    if 'devices' in cf:
-        dev_list = cf['devices'].split()
+    if 'devices' in config:
+        dev_list = config['devices'].split()
     else:
+        # TODO: don't know if this eve wil work today
         upsc = subprocess.Popen(['upsc', '-l'],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=(None if args.debug else subprocess.DEVNULL), text=True)
         dev_list = upsc.communicate()[0].splitlines()
 
     for device in dev_list:
-        topic = cf['device_topic'].replace('$device', device)
+        dev_topic = config['device_topic'].replace('$device', device)
 
         if args.debug:
-            print('device:', device, 'topic:', topic)
-        # topic structure:
-        # power
-        #     <dev_id>
-        #         ctl...
-        #         proto...
-        #         state...
-        #         updated
+            print('device:', device, 'topic:', dev_topic)
 
-        data = get_upsc_output(device)
+        upsc_data = get_upsc_output(device)
 
         # we will count the configured checks to report if none were enabled actually
         checks_run = 0
         checks_with_errors = 0
 
-        checks_run += 1
-        if data['errors'] != '' or ('ups_status' not in data['data']):
-            msg = data['errors']
-            checks_with_errors += 1
-        else:
-            msg = data['data']['ups_status']
+        # this will be sent last and be updated by other analysis code on the way
+        bulk_msg = '{ "model":"' + upsc_data['model'] + '", "errors":"' + upsc_data["errors"] + '"'
 
-        # doing bulk report message. we'll use mpublish, so no quoting is needed
-        bulk_msg = '{ "model":"' + data['model'] + '", "errors":"' + data["errors"] + '"'
-
-        for k in data['data']:
-            bulk_msg += ', "' + k + '":"' + str(data['data'][k]) + '"'
+        for k in upsc_data['data']:
+            bulk_msg += ', "' + k + '":"' + str(upsc_data['data'][k]) + '"'
 
         bulk_msg += ' }'
 
         # --------------------------------
-        if 'log_samples' in cf:
-            log_name = cf['log_samples'].replace('$device', device)
+        if 'log_samples' in config:
+            log_name = config['log_samples'].replace('$device', device)
             try:
-                t = time.strftime(r'%Y-%m-%d %H:%M:%S')
+                time_str = time.strftime(r'%Y-%m-%d %H:%M:%S')
 
                 line = ''
                 if len(log_items) > 0:  # subset of data requested
                     for k in log_items:
-                        if k and k not in data['data']:
-                            line += t + ' WARNING! upsc does not provide item "' + k + '"\n'
+                        if k and k not in upsc_data['data']:
+                            line += time_str + ' WARNING! upsc does not provide item "' + k + '"\n'
                             log_items[log_items.index(k)] = None
 
-                    line += t + ' { "date":"' + t + '"'
+                    line += time_str + ' { "date":"' + time_str + '"'
 
                     for k in log_items:
                         if k:
-                            line += ', "' + k + '":"' + str(data['data'][k]) + '"'
+                            line += ', "' + k + '":"' + str(upsc_data['data'][k]) + '"'
 
                     line += ' }\n'
 
-                else:
-                    line = t + bulk_msg.replace('\n', ' ') + '\n'
+                else:  # just log anything that we've got
+                    line = time_str + bulk_msg.replace('\n', ' ') + '\n'
 
                 open(log_name, mode='a').writelines(line)
 
             except:
-                del cf['log_samples']
+                del config['log_samples']
                 print('! Error opening log file: ', log_name, ':', sys.exc_info()[0], file=sys.stderr)
+        # if 'log_samples' in config
 
+        # is it time to post new data?
         next_rep = device + '_next_report'
 
         if (next_rep in stats) and stats[next_rep] > time.time():  # too soon to report?
             continue
 
-        stats[next_rep] = time.time() + float(cf['report_interval'])
-
-        # --------------------------------
-        if args.debug:
-            print('\n\n. sending: ', msg)
-
-        send_message(
-            '{ "publish":"', msg, '", "retain":true, "topics":[ "', topic, '/', cf['state_topic'], '" ] }\n')
-
-        # sending bulk data
-        stop = '25@5h256h256H'
-        send_message(
-            '{ "mpublish":"', stop, '", "retain":true, "topics":[ "', topic, '" ] }\n', bulk_msg, stop, "\n")
-
-        send_message('{ "publish":"', dates_json.replace('}', ''),
-                     r', \"checks run\":', str(checks_run),
-                     r', \"checks with errors\":', str(checks_with_errors), '}',
-                     '", "retain":true, "topics":[ "', topic, '/', cf['updated_topic'], '" ] }\n')
+        stats[next_rep] = time.time() + float(config['report_interval'])
 
         # quick post one-to-one data
-        if 'one_to_one' in cf:
-            for pair in cf.get('one_to_one').split():
-                a, t = pair.split(':')
+        if 'one_to_one' in config:
+            for pair in config.get('one_to_one').split():
+                oto_attr, oto_topic = pair.split(':')
                 checks_run += 1
 
-                if a in data['data']:
-                    msg = data['data'][a]
+                if oto_attr in upsc_data['data']:
+                    msg = upsc_data['data'][oto_attr]
                 else:
-                    msg = 'one_to_one attribute is missing from report: ' + a
+                    msg = 'one_to_one attribute is missing from report: ' + oto_attr
                     checks_with_errors += 1
 
-                send_message('{ "publish":"', msg, '", "retain":true, "topics":[ "', topic, '/', t, '" ] }\n')
+                send_message('{ "publish":"', msg, '", "retain":true, "topics":[ "',
+                             dev_topic, '/', oto_topic, '" ] }\n')
+
+        # finally sending general status message
+        if upsc_data['errors'] != '' or ('ups_status' not in upsc_data['data']):
+            msg = upsc_data['errors']
+            checks_with_errors += 1
+        else:
+            msg = upsc_data['data']['ups_status']
+        checks_run += 1
+
+        send_message( '{ "publish":"', msg, '", "retain":true, "topics":[ "',
+            dev_topic, '/', config['state_topic'], '" ] }\n')
+
+        # sending time stats
+        send_message('{ "publish":"', dates_json, '", "retain":true, "topics":[ "',
+                     dev_topic, '/', config['updated_topic'], '" ] }\n')
+
+        # doing bulk report message. we'll use 'mpublish' posting method, so no quoting is needed
+
+        stop_word = '25@5h256h256H'
+        bulk_msg = bulk_msg[:-1] + ', "checks run":' + str(checks_run) + \
+                ', "checks with errors":' + str(checks_with_errors) + ' }'
+
+        send_message('{ "mpublish":"', stop_word, '", "retain":true, "topics":[ "',
+            dev_topic, '" ] }\n', bulk_msg, stop_word, "\n")
 
 
 # end loop: for device in os.listdir( '/dev' ):
 
+
 ####################################################
-global config, dates_json, root_topic, log_items, sender, stats
+# MAIN
+global config, dates_json, global_config, root_topic, log_items, sender, stats
 
 config_path = '/etc/smarthome/reporters/reporters.ini'  # default
 
 ####################################################
 
-parser = argparse.ArgumentParser(description='Collect electrical power info and post it to mqtt')
+parser = argparse.ArgumentParser(description='Collecting electrical power info and post it to mqtt')
 parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
                     help='path to non-default (' + config_path + ') config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False, help='debug mode')
@@ -363,7 +432,8 @@ args = parser.parse_args()
 
 load_config(args.config_path)
 
-# mqtt sender script tend to hang up (why no SIGPIPE on stdin read?) if we exit hastily. trying to avoid this
+# mqtt sender script tend to hang up (why no SIGPIPE on stdin read?) if we exit hastily.
+# Try to avoid this.
 signal.signal(signal.SIGINT, handle_termination)
 signal.signal(signal.SIGTERM, handle_termination)
 
@@ -379,29 +449,30 @@ if args.debug:
     print('sender:', sender.args)
 
 dates_json = ''
-queue = []
-stats = {}
+queue = list()
+stats = dict()
 
 # pre-caching the list of items to put in the log
-log_items = []
-if 'log_items' in config['power']:
-    log_items = config['power'].get('log_items').split()
+log_items = list()
+if 'log_items' in config:
+    log_items = config.get('log_items').split()
 
 ##################################
 # set necessary defaults
-if 'sample_interval' not in config['power']:
+if 'sample_interval' not in config:
     if args.loop > 0:
-        config['power']['sample_interval'] = str(args.loop)
+        config['sample_interval'] = str(args.loop)
     else:
-        config['power']['sample_interval'] = '30'  # seconds
+        config['sample_interval'] = '30'  # seconds
 
-if 'report_interval' not in config['power']:
+if 'report_interval' not in config:
     if args.loop > 0:
-        config['power']['report_interval'] = str(args.loop)
+        config['report_interval'] = str(args.loop)
     else:
-        config['power']['report_interval'] = config['power']['sample_interval']
+        config['report_interval'] = config['sample_interval']
 
 ##################################
+# Which functions should we run. default is check_nut
 if args.action != '':
     queue.append(args.action)
 else:
@@ -414,10 +485,10 @@ while True:
     for func in queue:
         func()
 
-    if int(config['power']['sample_interval']) <= 0:
+    if int(config['sample_interval']) <= 0:
         break
 
-    time.sleep(int(config['power']['sample_interval']))
+    time.sleep(int(config['sample_interval']))
 
 try:
     sender.communicate(input='\n\n{ "cmd":"exit" }\n')

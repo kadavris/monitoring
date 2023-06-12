@@ -26,12 +26,13 @@ sender = /bin/cat
 ; root for all topics.
 root_topic = hw/power
 
-;devices = uncomment and supply your space-separated list if you don't want to rely on upsc -l output
+; uncomment and supply your space-separated list if you don't want to rely on upsc -l output
+;devices = pwalker
 
-; device's root topic. $$device will be substituted by the device name
+; device's root topic. $$device will be substituted by the currently examined device's name
 device_topic = ${root_topic}/$$device
 
-; NOTE: replace all '.' with '_'! Reported attribute names will be processed in this way
+; NOTE: In atrributes names replace all '.' with '_'! Reported data will be processed in this way
 
 ; upsc reported attribute to sub-topic name map to post directly. space-separated attr:topic pairs
 one_to_one = device_type:type 
@@ -77,4 +78,11 @@ log_items = input_voltage
 
 ; push data to sender every N seconds
 report_interval = 30
+
+; You can add device-specific config parts with a new section with [power.NUT_ID] name:
+[power.pwalker]
+; If there is no vendor report for your model,
+; use .attribute = value here to fake it
+.mfr = Powerwalker
+.model = VFI 2000CRM LCD
 
