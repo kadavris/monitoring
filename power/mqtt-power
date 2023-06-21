@@ -213,7 +213,11 @@ def get_upsc_output(device: str) -> dict:
     to_return['need'] = upsc_data_needed  # indicating what we intended to collect here
     to_return['data'] = dict()  # attributes values will be here
 
-    upsc = subprocess.Popen(['upsc', device],
+    upsc_bin = ['upsc', device]
+    if 'upsc_binary' in config:
+        upsc_bin = config['upsc_binary'].replace('$device', device).split()
+
+    upsc = subprocess.Popen(upsc_bin,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=(None if args.debug else subprocess.DEVNULL), text=True)
 
@@ -304,7 +308,10 @@ def check_nut() -> None:
     if 'devices' in config:
         dev_list = config['devices'].split()
     else:
-        # TODO: don't know if this eve wil work today
+        # TODO: don't know if this even will work today
+        if args.debug:
+            print('requesting the list of devices from upsc')
+
         upsc = subprocess.Popen(['upsc', '-l'],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=(None if args.debug else subprocess.DEVNULL), text=True)
@@ -424,8 +431,8 @@ parser = argparse.ArgumentParser(description='Collecting electrical power info a
 parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
                     help='path to non-default (' + config_path + ') config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False, help='debug mode')
-parser.add_argument('-l', '--loop', dest='loop', action='store', type=int, default=0,
-                    help='Loop forever, sleeping <int> seconds between passes. Overrides config settings')
+parser.add_argument('-l', '--loop', dest='loop', action='store', type=int, default=-1,
+                    help='Loop forever, sleeping <int> seconds between passes. If > 0 then verrides config "sample_interval" settings')
 parser.add_argument('action', nargs='?', default='', help='non-default action name to run')
 
 args = parser.parse_args()
@@ -478,7 +485,7 @@ if args.action != '':
 else:
     queue = [check_nut]
 
-while True:
+while True:  # main loop
     dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
     dates_json = dates_json.replace(r'"', r'\"')
 

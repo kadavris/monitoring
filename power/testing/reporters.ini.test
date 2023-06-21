@@ -10,9 +10,9 @@ state_topic = state
 ;====================================
 [power]
 ; for debugging. use our mqtt-tool or another agent that understand json input
-sender = /bin/cat
+sender = cat
 
-;upsc_binary = /usr/local/bin/upsc --someflag
+upsc_binary = cat test_strings.txt
 
 ; Here is sample hieararchy that I use in my smarthome setup
 ;power
@@ -29,7 +29,7 @@ sender = /bin/cat
 root_topic = hw/power
 
 ; uncomment and supply your space-separated list if you don't want to rely on upsc -l output
-;devices = pwalker
+devices = main
 
 ; device's root topic. $$device will be substituted by the currently examined device's name
 device_topic = ${root_topic}/$$device
