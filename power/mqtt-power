@@ -195,7 +195,7 @@ def get_upsc_output(device: str) -> dict:
     """
     global args, config, stats
 
-    to_return = {"model": "UNKNOWN", "errors": ''}
+    to_return = {"model": "", "errors": ''}
 
     # initializing the list of minimal attributes that we needed (note '.' replaced by '_')
     upsc_data_needed = [
@@ -211,11 +211,11 @@ def get_upsc_output(device: str) -> dict:
         upsc_data_needed += to_return['bulk_report']
 
     to_return['need'] = upsc_data_needed  # indicating what we intended to collect here
-    to_return['data'] = dict()  # attributes values will be here
+    to_return['data'] = {}  # attributes values will be here
 
     upsc_bin = ['upsc', device]
     if 'upsc_binary' in config:
-        upsc_bin = config['upsc_binary'].replace('$device', device).split()
+        upsc_bin = config.get('upsc_binary').replace('$device', device).split()
 
     upsc = subprocess.Popen(upsc_bin,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -249,19 +249,6 @@ def get_upsc_output(device: str) -> dict:
 
         to_return['data'][attribute_name] = value
 
-        # fill in specials:
-        if attribute_name == 'device_mfr':  # device.mfr: EATON. Some UPS report empty string here
-            to_return['model'] = "Model: "
-            if value != "":
-                to_return['model'] += value
-            else:
-                to_return['model'] += get_model_specific_config(device, ".mfr", "UNSPECIFIED")
-        elif attribute_name == 'device_model':  # device.model: 5E 1500i
-            if value != "":
-                to_return['model'] += ' ' + value
-            else:
-                to_return['model'] += ' ' + get_model_specific_config(device, ".model", "")
-
     # do some stats
     try:
         t = time.localtime()
@@ -292,6 +279,18 @@ def get_upsc_output(device: str) -> dict:
         to_return['data']['frequency_mean_day'] = stats[device]['d_f_mean']
     except:
         pass
+
+    # fill in specials:
+    to_return['model'] = "Model: "
+    if 'device_mfr' in to_return['data'] and to_return['data']['device_mfr'] != "":  # device.mfr: EATON. Some UPS report empty string here
+        to_return['model'] += to_return['data']['device_mfr']
+    else:
+        to_return['model'] += get_model_specific_config(device, ".mfr", "UNSPECIFIED")
+
+    if 'device_model' in to_return['data'] and to_return['data']['device_model']:  # device.model: 5E 1500i
+        to_return['model'] += ' ' + to_return['data']['device_model']
+    else:
+        to_return['model'] += ' ' + get_model_specific_config(device, ".model", "")
 
     return to_return
 

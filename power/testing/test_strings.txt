@@ -10,8 +10,8 @@ battery.voltage: 48
 battery.voltage.high: 52
 battery.voltage.low: 42
 battery.voltage.nominal: 52
-device.mfr: test_device
-device.model: test_model
+#device.mfr: test_device
+#device.model: test_model
 device.part: 0
 device.serial: SN12345
 device.type: 0

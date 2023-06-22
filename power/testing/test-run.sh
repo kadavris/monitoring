@@ -1,2 +1,2 @@
 #!/bin/sh
-python ../mqtt-power --debug --config ./reporters.ini.test
+python3 ../mqtt-power --debug --config ./reporters.ini.test
