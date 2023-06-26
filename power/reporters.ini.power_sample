@@ -74,7 +74,11 @@ standard_freq = 50,4
 sample_interval = 10
 
 ; comment if you don't need to log raw samples into big big file
-log_samples = /var/log/smarthome/$$device.log
+; This is the name of the log file
+log_samples = /var/log/smarthome/ups-$$device.log
+; Optional list of items that should be logged.
+; If omitted, then all collected data will be posted. That still may be a subset of a full upsc report.
+; Check one_to_one and bulk_report options for a list of approved attributes.
 log_items = input_voltage
   voltage_mean_minute
   frequency_mean_minute

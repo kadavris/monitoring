@@ -73,8 +73,8 @@ standard_freq = 50,4
 ; loop disabled if value is <= 0
 sample_interval = 10
 
-; comment if you don't need to log raw samples into big big file
-log_samples = /var/log/smarthome/$$device.log
+; comment if you don't need to log raw samples into the big big file
+log_samples = /var/log/smarthome/ups-$$device.log
 log_items = input_voltage
   voltage_mean_minute
   frequency_mean_minute
