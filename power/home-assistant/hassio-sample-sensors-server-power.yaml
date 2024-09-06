@@ -2,34 +2,34 @@
 # UPS:
 #------------------------------------------------
 - platform: mqtt
-  state_topic: "hw/power/eaton1500/state"
+  state_topic: "hw/power/main/state"
   name: "Main UPS: state"
-  json_attributes_topic: "hw/power/eaton1500"
+  json_attributes_topic: "hw/power/main"
   device:
     manufacturer: "{{ value_json.device_mfr }}"
     model: "{{ value_json.device_model }}"
     name: "Main UPS"
-    identifiers: "Eaton 1500"
+    identifiers: "UPSUS Sonorus"
 - platform: mqtt
-  state_topic: "hw/power/eaton1500/out_load"
+  state_topic: "hw/power/main/out_load"
   name: "Main UPS: load"
   unit_of_measurement: '%'
   device_class: power
 - platform: mqtt
-  state_topic: "hw/power/eaton1500/batt_charge"
+  state_topic: "hw/power/main/batt_charge"
   name: "Main UPS: battery charge"
   unit_of_measurement: '%'
   device_class: battery
 - platform: mqtt
-  state_topic: "hw/power/eaton1500/in_volts"
+  state_topic: "hw/power/main/in_volts"
   name: "Main UPS: input voltage"
   unit_of_measurement: 'V'
   device_class: voltage
 
 # UPS: data freshness check
 - platform: mqtt
-  state_topic: "hw/power/eaton1500/updated"
-  json_attributes_topic: "hw/power/eaton1500/updated"
+  state_topic: "hw/power/main/updated"
+  json_attributes_topic: "hw/power/main/updated"
   name: "Main UPS: last update"
   device_class: timestamp
   value_template: "{{ value_json.timestamp }}"
