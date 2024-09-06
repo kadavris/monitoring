@@ -210,6 +210,11 @@ def get_upsc_output(device: str) -> dict:
     ]
 
     # adding user-defined properties
+    if 'one_to_one' in CONFIG:
+        for pair in CONFIG.get('one_to_one').split():
+            oto_attr, oto_topic = pair.split(':')
+            upsc_data_needed.append(oto_attr)
+
     if 'bulk_report' in CONFIG:
         to_return['bulk_report'] = CONFIG.get('bulk_report').split()
         upsc_data_needed += to_return['bulk_report']
@@ -232,6 +237,7 @@ def get_upsc_output(device: str) -> dict:
         return to_return
 
     out, err = upsc.communicate()  # communicate() will return all output at once
+
     if err and (err != ''):
         to_return["errors"] = '"upsc error":"' + err + "'"
         print(to_return["errors"])
@@ -245,8 +251,6 @@ def get_upsc_output(device: str) -> dict:
 
         attribute_name = rm.group(1).replace('.', '_')
         value = rm.group(2).strip()
-
-        attribute_name.replace('.', '_')
 
         if attribute_name not in upsc_data_needed:
             continue
@@ -396,7 +400,7 @@ def check_nut() -> None:
                 if oto_attr in upsc_data['data']:
                     msg = upsc_data['data'][oto_attr]
                 else:
-                    msg = 'one_to_one attribute is missing from report: ' + oto_attr
+                    msg = 'NO DATA'
                     checks_with_errors += 1
 
                 send_message('{ "publish":"', msg, '", "retain":true, "topics":[ "',
