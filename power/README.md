@@ -26,8 +26,8 @@ This script see the `[power]` section as its own, so you can use single .ini for
 ### Mode of operation and constraints
 As this is all dependent on upsc's output and fundamentally on concrete UPS device willingless
 to report or conceal some data, we assume that the basic report should contain this minimal list of attributes:
-* device.mfr - Device manufacturer, e.g. "EATON"
-* device.model: Device model, e.g. "5E 1500i"
+* device.mfr - Device manufacturer, e.g. "SomeVendor"
+* device.model: Device model, e.g. "UPSUS Giganticus 9000"
 * device.type: The type of the device, e.g. "ups"
 * ups.status: The basic status, e.g. "OL", "BOOST", etc
 

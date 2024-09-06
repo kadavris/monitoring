@@ -38,29 +38,30 @@ device_topic = ${root_topic}/$$device
 
 ; attribute to sub-topic name map. Data associated with these attributes wiil be posted directly to mapped topic.
 ; use space-separated attr:topic pairs
-one_to_one = device_type:type 
+one_to_one = device_type:type
   battery_charge:batt_charge
-  input_voltage:in_volt
+  battery_runtime:batt_runtime
+  battery_voltage:batt_voltage
+  input_voltage:in_volts
+  ups_alarm:ups_alarm
   ups_load:out_load
+  ups_temperature:ups_temperature
 
 ; these attributes will be included into combined report to device_topic
 ; under the "attributes"{} json section.
 ; separate by space, multiline allowed.
 ; NOTE that device_mfr,  device_model,  device_type and  ups_status will be included always
-bulk_report = battery_charge
-  battery_runtime
-  input_voltage
-  input_current
+bulk_report = battery_energysave
+  battery_voltage_nominal
+  battery_voltage_high
+  battery_voltage_low
   input_frequency
-  input_load
-  input_power
   output_voltage
   output_frequency
   output_current
-  ups_alarm
-  ups_load
-  ups_power
+  output_current_nominal
   ups_power_nominal
+  ups_power
 
 ; --------------------
 ; this section is about what and how frequent to report
@@ -94,4 +95,3 @@ report_interval = 30
 ; use .attribute = value here to fake it
 .mfr = Powerwalker
 .model = VFI 2000CRM LCD
-
