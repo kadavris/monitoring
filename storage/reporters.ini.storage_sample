@@ -7,11 +7,13 @@ updated_topic = updated
 ; nagios-like status, e.g. from check_ide_smart for /dev/sdX
 state_topic = state
 
+# tool to actually post data to the mqtt
+# see http://github.com/kadavris/mqtt-tool for a working solution
+sender = /etc/smarthome/mqtt/mqtt --stdin --quiet storage-reports
+
 ;====================================
 [storage]
-; The program that will actually deliver the data to the end-point like MQTT broker
-;sender = /etc/smarthome/mqtt/mqtt --stdin --quiet storage-reports
-;sender = /etc/smarthome/mqtt/mqtt --stdin storage-reports
+# Override for debuging
 sender = /bin/cat
 
 ; section for storage status reporter.

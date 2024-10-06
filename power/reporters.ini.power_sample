@@ -7,6 +7,10 @@ updated_topic = updated
 ; nagios-like status, e.g. from check_ide_smart for /dev/sdX
 state_topic = state
 
+# tool to actually post data to the mqtt
+# see http://github.com/kadavris/mqtt-tool for a working solution
+sender = /etc/smarthome/mqtt/mqtt --stdin --quiet power-reports
+
 ;====================================
 [power]
 ; for debugging. use our mqtt-tool or another agent that understand json input
