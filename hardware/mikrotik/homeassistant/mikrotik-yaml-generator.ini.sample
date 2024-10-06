@@ -1,0 +1,21 @@
+# Where is the .ini of mikrotik2mqtt
+ini=/etc/smarthome/reporters/mikrotik2mqtt.ini
+
+overheat=59
+
+# good range
+voltage_low=10
+voltage_high=55
+
+# Make those entities about the traffic:
+traffic_entities=rx-byte tx-byte rx-error tx-error
+# last-link-up-time link-downs
+#rx-drop
+#tx-drop
+#rx-packet
+#tx-packet
+#tx-queue-drop
+#fp-rx-byte
+#fp-tx-byte
+#fp-rx-packet
+#fp-tx-packet

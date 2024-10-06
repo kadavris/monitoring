@@ -1,0 +1,14 @@
+[Unit]
+Description=MikroTik router data to MQTT daemon
+After=network.target
+
+[Service]
+User=smarthome
+Group=smarthome
+ExecStart=/etc/smarthome/reporters/mikrotik2mqtt --loop
+WorkingDirectory=/etc/smarthome/reporters
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

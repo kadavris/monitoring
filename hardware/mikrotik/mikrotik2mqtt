@@ -1,0 +1,647 @@
+#!/bin/python
+# This script queries Mikrotik router for various data
+# and pushes it to the mqtt agent
+# Copyright by Andrej Pakhutin (pakhutin <at> gmail)
+# http://github.com/kadavris/monitoring
+# License: see accompanying LICENSE file
+
+import argparse
+import configparser
+import os
+import re
+import shlex
+import select
+import signal
+import socket
+import ssh
+import ssh.session
+import subprocess
+import sys
+import time
+
+
+#############################################################
+def handle_termination(signum, frame) -> None:
+    """
+    Will (safely) handle termination. Stopping sender agend on its rails.
+    :param signum: unused
+    :param frame: unused
+    :return: None
+    """
+    if ARGS.debug:
+        print("! signal caught. exiting.", file=sys.stderr)
+
+    if Sender:
+        Sender.terminate()
+
+    sys.exit(0)
+
+
+#############################################################
+def load_config(conf_file: str) -> {}:
+    """
+    Will load configuration file, checking for problems beforehand
+    :param conf_file: path to config file
+    :return: None
+    """
+    global ARGS, CONFIG, GLOBAL_CONFIG
+
+    file = conf_file
+
+    if not os.path.exists(file):
+        if re.search(r'/', file):
+            print("! Can't open config: ", file, file=sys.stderr)
+            sys.exit(1)
+
+        file = os.path.dirname(sys.argv[0]) + '/' + conf_file
+
+        if not os.path.exists(file):
+            file = '/etc/smarthome/reporters/' + conf_file
+
+    if ARGS.debug:
+        print("+ Loading config:", file)
+
+    GLOBAL_CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
+    GLOBAL_CONFIG.read(file)
+    return GLOBAL_CONFIG
+
+
+########################################
+def conf_vars_is_set(names: list) -> bool:
+    """
+    Checks if a list of variables is present and set to true/on in the CONFIG
+
+    :param names: list of config variables to check
+    :return: True if present and set ON
+    """
+    global CONFIG
+
+    if not CONFIG:
+        return False
+
+    for n in names:
+        if n not in CONFIG or not CONFIG[n]:
+            return False
+
+    return True
+
+
+########################################
+def spawn_sender() -> None:
+    """
+    Will spawn mqtt sender process, checking for various problems
+
+    :return: None
+    """
+    global ARGS, CONFIG, Sender
+
+    if ARGS.debug:
+        print("+ Spawning sender process:", CONFIG['sender'], file=sys.stderr)
+
+    # default bufsize may gobble a whole loop of data and do nothing till the next
+    Sender = subprocess.Popen(shlex.split(CONFIG['sender']), bufsize=1,
+                              stdin=subprocess.PIPE,
+                              stdout=(None if ARGS.debug or CONFIG['sender'].find('--debug')
+                                      else subprocess.DEVNULL),
+                              stderr=(None if ARGS.debug or CONFIG['sender'].find('--debug')
+                                      else subprocess.DEVNULL),
+                              text=True)
+
+    if not Sender:
+        print('? ERROR running ', CONFIG['sender'], file=sys.stderr)
+        sys.exit(1)
+
+    if Sender.poll():  # poll() return None if process is still there
+        print('? ERROR with running ', Sender.args, ": exited ",
+              ("abnormally" if Sender.returncode > 0 else "W/O error"),
+              "with rc:", Sender.returncode, file=sys.stderr)
+        sys.exit(1)
+
+
+########################################
+def send_message_raw(*in_msg) -> None:
+    """
+    Sends message as is to the spawned mqtt agent
+
+    :param in_msg: str list
+    :return: None
+    """
+    global ARGS, Sender
+
+    msg = ''.join(in_msg)
+
+    try_number = 1
+    while True:
+        if Sender.poll():  # check if it is still alive (not None)
+            spawn_sender()
+
+        if ARGS.debug:
+            print('> Sending:', msg)
+
+        try:
+            Sender.stdin.write(msg)
+            Sender.stdin.write("\n")
+
+        except:
+            if ARGS.debug:
+                exc_type, exc_val, traceback = sys.exc_info()
+
+                if exc_val:
+                    exc_val = ','.join(exc_val.args)
+                else:
+                    exc_val = 'UNKNOWN REASON'
+                print("! Sending failed (", exc_val, ")", file=sys.stderr)
+
+            try_number += 1
+
+            if try_number > 3:
+                try_number = 1
+
+                print("!!! Respawning.", file=sys.stderr)
+                spawn_sender()
+        else:
+            break
+
+        # waiting for 3 sec for answer
+        if Sender.stdout:
+            answer = ''
+
+            # gobble previous answers before checking last RC
+            while select.select([Sender.stdout], [None], [None], 3)[0][0] > 0:
+                answer = Sender.stdout.readline()
+
+                if ARGS.debug:
+                    print('< Answer:', answer)
+
+            if not answer.find('"rc":0'):
+                print(time.localtime(), "!ERROR processing packet: ", ''.join(msg),
+                      file=sys.stderr)
+        else:
+            time.sleep(3.0)  # let it process then
+
+
+########################################
+def send_message(*in_msg) -> None:
+    """
+    Sends message to the spawned mqtt agent.
+    Pre-processin it, adding quotes to the line-ends, as mqtt agent expecting.
+
+    :param in_msg: list of strings: parts of the message
+    :return: None
+    """
+
+    # our standard sending tool expect either one-line json
+    # or back-slash terminated multiline one
+    msg = re.sub(r"([^\\])\n", "\\1\\\n", "".join(in_msg))
+
+    send_message_raw(msg)
+
+
+########################################
+def send_message_long(topic: str, *in_msg, retain=False) -> None:
+    """
+    Sends complex message to the mqtt agent
+
+    :param topic: str. topic name
+    :param in_msg: str list
+    :param retain: mqtt retain
+    :return: None
+    """
+    global CONFIG
+
+    # this should be a highly unique stuff really
+    stop_word = CONFIG["stop_word"] if "stop_word" in CONFIG else "3%g3h@544/ujW^r}gj"
+
+    send_message_raw('{ "mpublish":"', stop_word, '", "retain":', str(retain).lower(),
+                     ', "topics":[ "', topic, '" ] }\n', in_msg, stop_word)
+
+
+########################################
+def send_message_short(topic: str, *in_msg, retain=False) -> None:
+    """
+    Sends a (short) message to the mqtt agent
+
+    :param topic: str. topic name
+    :param in_msg: str list
+    :param retain: mqtt retain
+    :return: None
+    """
+    send_message('{ "publish":"', ''.join(in_msg), '", "retain":', str(retain).lower(),
+                 ', "topics":[ "', topic, '" ] }')
+
+
+####################################################
+def make_topic_path(*names) -> str:
+    """
+    Construct full topic name/path from supplied components
+
+    :param names: list of path components
+    :return: str: Full path
+    """
+    global CONFIG
+
+    return CONFIG['topic_root'] + '/' + '/'.join(names)
+
+
+####################################################
+def open_connection() -> bool:
+    """
+    Prepares ssh connection according to the current router CONFIG
+    Uses global conn_states to store connection data betweeen invocations.
+
+    :return: bool: False for problems
+    """
+    global CONFIG, conn_states
+
+    state = None
+    if not CONFIG['ip'] in conn_states:
+        if ARGS.debug:
+            print("+D: new con:", CONFIG['ip'])
+
+        state = {
+            "socket": socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+            "session": ssh.session.Session(),
+            "channel": None}
+
+        conn_states[CONFIG['ip']] = state
+    else:
+        state = conn_states[CONFIG['ip']]
+
+    # poor man's socket.is_connected()
+    try:
+        state['socket'].send(b'')
+    except:
+        state['socket'].connect((CONFIG['ip'], int(CONFIG['port'])))
+
+    try:
+        if not state['session'].is_connected():
+            state['session'].options_set(ssh.options.HOST, CONFIG['ip'])
+            state['session'].options_set(ssh.options.USER, CONFIG['user'])
+            state['session'].options_set_port(int(CONFIG['port']))
+            state['session'].set_socket(state['socket'])
+            state['session'].connect()
+            state['session'].userauth_password(CONFIG['user'], CONFIG['password'])
+
+        if not state['channel']:
+            state['channel'] = state['session'].channel_new()
+
+        if not state['channel'].is_open():
+            state['channel'].open_session()
+            # It seems that the shell channel maybe better to be reusable,
+            # but it comes with a great burden to deal with mikrotik's banners and ANSI positioning garbage.
+            # Unfortunately, the request_pty_size() with 'dumb' terminal parameter
+            # is making router unwilling to cooperate.
+            # So if I will come up with a nice solution later it may be uncommented again.
+            # But now we will use single-shot request_exec()
+            # state['channel'].request_pty()
+            # state['channel'].request_shell()
+
+            # skipping welcome message
+            # prompt = '[' + CONFIG['user'] + '@'
+
+            #while True:
+            #    size, data = state['channel'].read()
+            #    data = str(data, encoding='ascii')
+
+            #    a = data.splitlines()
+
+            #    if ARGS.debug:
+            #        print("+D: head:", data);
+            #        print("    last: '" + a[-1] + "'");
+
+            #    if a[-1][0:len(prompt)] == prompt:
+            #        break
+
+    except Exception as e:
+        print("Some problem in open_connection():", e.args)
+        return False
+
+    return True
+
+####################################################
+def send_command(cmd: str) -> None:
+    """
+    Sends command to remote side, output is not expected or should be processed outide
+
+    :param cmd: str
+    :return: None
+    """
+    global CONFIG, conn_states
+
+    if ARGS.debug:
+        print("+D: sending:", cmd)
+
+    open_connection()  # redo the channel
+
+    state = conn_states[CONFIG['ip']]
+    state['channel'].request_exec(cmd)
+
+
+####################################################
+def get_command_output(cmd: str) -> list:
+    """
+    Sends request via ssh session and reads output after
+
+    :param cmd: str: command to send
+    :return: list: list of command's output lines
+    """
+    global CONFIG, conn_states
+
+    # Which prompt to expect as an end of a command output
+    #prompt = '[' + CONFIG['user'] + '@'
+
+    if ARGS.debug:
+        print("+D: sending:", cmd)
+
+    open_connection()  # redo the channel
+
+    state = conn_states[CONFIG['ip']]
+    state['channel'].request_exec(cmd)
+
+    # If we're in the shell channel - use write()
+    #state['channel'].write(cmd + '\r\n')
+
+    size, data = state['channel'].read()
+
+    ret = ''
+    while size > 0:
+        data = str(data, encoding='ascii')
+        ret += data
+
+        if ARGS.debug:
+            print("+D: recv:", data)
+
+        #if data.rfind(prompt) != -1:  # Checking for the prompt - end of cmd output. But it's for shell channel only
+        #   break
+
+        time.sleep(1)  # Wait so there will be more data to read next time. Mikrotik's is not the fastest CPU.
+        size, data = state['channel'].read()
+
+    # For the one-shot .request_exec(cmd) we can't re-use this channel anymore
+    state['channel'].close()
+    state['channel'] = None
+
+    ret = ret.splitlines()
+
+    while True:
+        if ret[-1].strip() != '':  # Usually there is empty line at the end of the output.
+            break
+
+        ret.pop()
+
+    return ret
+
+
+####################################################
+def get_hardware_info() -> bool:
+    """
+    Retrieves hardware-relate information like PSU voltage and device temperature
+
+    :return: bool: False for problems
+    """
+    global CONFIG
+
+    ans = get_command_output('/system health print')
+    #      voltage: 14.1V
+    #  temperature: 44C
+
+    if not ans:
+        return False
+
+    for line in ans:
+        d = line.strip().rstrip('VC').split(':')
+
+        d[1] = d[1].strip()
+
+        if d[0] == 'temperature' and conf_vars_is_set(['get_temperature', 'topic_temperature']):
+            send_message_short(make_topic_path(CONFIG['topic_temperature']), d[1])
+
+        if d[0] == 'voltage' and conf_vars_is_set(['get_voltage', 'topic_voltage']):
+            send_message_short(make_topic_path(CONFIG['topic_voltage']), d[1])
+
+    return True
+
+
+####################################################
+def values_are_different(ans: list, old_var: str, new_var: str) -> str:
+    """
+    Compares values of two provided variable names and reports if "new" var value is different
+
+    :param ans: list: list of strings in the form of "varname:value"
+    :param old_var: "old" variable name
+    :param new_var: "new" variable name
+    :return: str: empty if no difference, "new" var value if there is
+    """
+
+    old_val = ''
+    new_val = ''
+
+    for line in ans:
+        var, val = line.strip().split(':')
+
+        if var == old_var:
+            old_val = val
+
+        elif var == new_var:
+            new_val = val
+
+    if old_val != '' and new_val != '' and old_val != new_val:
+        return new_val
+
+    return ''
+
+
+####################################################
+def get_upgrades() -> bool:
+    global CONFIG
+
+    out = []
+    ans = get_command_output('/system routerboard print')
+    #  current-firmware: 6.48.3
+    #  upgrade-firmware: 6.48.3
+
+    if (newfw := values_are_different(ans, 'current-firmware', 'upgrade-firmware')) != '':
+        out.append("New firmware: " + newfw)
+
+    # ---------------------------------------
+    ans = get_command_output('/system package update print')
+    #  installed-version: 6.48.3
+    #     latest-version: 6.48.4
+
+    if (newpkg := values_are_different(ans, 'installed-version', 'latest-version')) != '':
+        out.append("Packages upgrade available: " + newpkg)
+
+    if len(out) == 0:
+        return False
+
+    topic = CONFIG['topic_root']
+    if 'topic_upgrades' in CONFIG:
+        topic += '/' + CONFIG['topic_upgrades']
+
+    send_message_short(topic, ', '.join(out))
+
+    return True
+
+
+####################################################
+def get_traffic() -> bool:
+    """
+    Goes through the list of interfaces from .ini and requests statistics for each of them
+
+    :return: bool: False for problems
+    """
+    global CONFIG
+
+    for interface in CONFIG['get_traffic'].split():
+        ans = get_command_output('/interface print stats-detail from=' + interface)
+        # Flags: D - dynamic, X - disabled, R - running, S - slave
+        # 0  RS name="wlan1" last-link-up-time=sep/11/2024 00:55:09 link-downs=0 rx-byte=17 503 683 164
+        # ...
+        # Flags: D - dynamic, X - disabled, R - running, S - slave
+        # 0  R  ;;; defconf
+        #   name="bridge-LAN" last-link-up-time=sep/11/2024 00:55:02 link-downs=0
+        #   rx-byte=152 316 481 201 tx-byte=1 255 171 362 108
+        #   rx-packet=642 466 564 tx-packet=983 478 441 rx-drop=0 tx-drop=0
+        #   tx-queue-drop=0 rx-error=0 tx-error=0 fp-rx-byte=0 fp-tx-byte=0
+        #   fp-rx-packet=0 fp-tx-packet=0
+
+        if not ans:
+            continue
+
+        ans.pop(0)  # removing header
+        # adding flags as a variable
+        ans = re.sub(r'^\s*\d+\s*([A-Z]+)\s+(;;;.*?)?(name=")', r'flags=\1 \3', ' '.join(ans))
+
+        # and converting all to json
+        ans = re.sub(r'\s+([-\w]+=)', r'\n\1', ans).splitlines()  # split to separate lines for easy processing
+
+        out = '{'
+        for line in ans:
+            var, val = line.split('=')
+
+            val = val.strip()
+            if re.match(r'[\d\s]+$', val):   # value is digits only
+                val = val.replace(' ', '')
+            elif val[0] != '"':
+                val = '"' + val + '"'
+
+            out += '"' + var + '":' + val + ','
+
+        send_message_short(make_topic_path(CONFIG['topic_traffic'], interface.lower()),
+                           out.rstrip(',').replace('"', r'\"'), '}')
+
+    return True
+
+
+####################################################
+def poll_device() -> None:
+    """
+    Do all reqquested data retrievals for the single device
+
+    :return: None
+    """
+    global CONFIG
+
+    if conf_vars_is_set(['get_voltage', 'topic_voltage']) or conf_vars_is_set(['get_temperature', 'topic_temperature']):
+        get_hardware_info()
+
+    if conf_vars_is_set(['get_updates']):
+        get_upgrades()
+
+    if conf_vars_is_set(['get_traffic', 'topic_traffic']):
+        get_traffic()
+
+    send_message_short(make_topic_path('updated'), Dates_json, retain=True)
+
+
+####################################################
+# MAIN
+global GLOBAL_CONFIG, Sender
+
+config_path = '/etc/smarthome/reporters/mikrotik2mqtt.ini'  # default
+
+parser = argparse.ArgumentParser(
+    description='Queries MikroTik router(s) for various data and pushes it to the mqtt agent.\n' +
+                'Copyright by Andrej Pakhutin (pakhutin <at> gmail)\n' +
+                'V1.000')
+parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
+                    help='path to non-default (' + config_path + ') config file')
+parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
+                    help='debug mode')
+parser.add_argument('-l', '--loop', dest='loop', action='store_true', default=False,
+                    help='Loop forever, sleeping report_interval(see .ini) seconds between passes.')
+# parser.add_argument('action', nargs='?', default='', help='non-default action name to run')
+
+ARGS = parser.parse_args()
+
+CONFIG = load_config(ARGS.config_path)['DEFAULT']
+
+# mqtt sender script tend to hang up (why no SIGPIPE on stdin read?) if we exit hastily.
+# Trying to avoid this.
+signal.signal(signal.SIGINT, handle_termination)
+signal.signal(signal.SIGTERM, handle_termination)
+
+conn_states = {}
+
+spawn_sender()
+
+if ARGS.debug:
+    if not Sender:
+        sys.exit(1)
+
+    print('sender:', Sender.args)
+
+##################################
+# set necessary defaults
+if ARGS.loop > 0:
+    CONFIG['report_interval'] = str(ARGS.loop)
+
+if 'report_interval' not in CONFIG:
+    CONFIG['report_interval'] = '60'
+
+# will be used globally in misc topics posts to show last data times
+Dates_json = ''
+
+##################################
+while True:  # main loop
+    Dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
+    Dates_json = Dates_json.replace(r'"', r'\"')
+
+    for router_section in GLOBAL_CONFIG:
+        if router_section == 'DEFAULT':
+            continue
+
+        # Fo the simplicity, the CONFIG section ptr have been made global,
+        # so all data retrieval functions rely on it to be set to the current .ini section
+        CONFIG = GLOBAL_CONFIG[router_section]
+
+        if conf_vars_is_set(['disabled']):
+            continue
+
+        if not open_connection():
+            continue
+
+        poll_device()
+
+    if not ARGS.loop:
+        break
+
+    time.sleep(int(CONFIG['report_interval']))
+
+# Wrapping up
+try:
+    Sender.communicate(input='\n\n{ "cmd":"exit" }\n')
+
+    Sender.wait(timeout=15.0)
+except:
+    pass
+
+Sender.terminate()
+
+for router_section in GLOBAL_CONFIG:
+    if router_section == 'DEFAULT':
+        continue
+
+    CONFIG = GLOBAL_CONFIG[router_section]
+
+    send_command('/quit')

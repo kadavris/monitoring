@@ -1,0 +1,39 @@
+[DEFAULT]
+# for all "topic something" names the final form will be
+# "topic root" + / + this topic name.
+#   e.g. if topic root = hardware/my_router
+#   then topic for temperature will be: hardware/my_router/temperature, etc.
+
+# whether firmware/packages updates are available. if not filled in then root topic is used
+#topic_upgrades = upgrades
+# device temperature
+topic_temperature = temperature
+# PSU voltage
+topic_voltage = voltage
+# prefix for traffic reports tree: hardware/my_router/traffic: json
+topic_traffic = traffic
+
+get_updates = true
+get_temperature = true
+get_voltage = true
+
+# seconds between posting new data
+report_interval = 60
+
+# tool to actually post data to the mqtt
+# see http://github.com/kadavris/mqtt-tool for a working solution
+sender = /etc/smarthome/mqtt/mqtt --stdin --quiet router-reports
+
+port = 22
+
+[router1]
+#disable = true
+ip = 1.1.1.1
+user = user
+password = password
+
+# the root topic (prefix) for all of this router's topics
+topic_root = hw/router/router1
+
+# for which interfaces to collect traffic data: space separated list
+get_traffic = wan_bridge lan_bride wlan_bridge

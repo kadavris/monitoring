@@ -1,0 +1,3 @@
+#!/bin/sh
+su smarthome -s /bin/sh -c './mikrotik2mqtt --debug'
+pkill -9 -f router-reports
