@@ -2,6 +2,7 @@
 Please consult README files within each directory for extended descriptions
 * boot-time - miscellaneous, small stuff to be run once at boot time
 * cron - things that may go into cron
+* hardware/mikrotik - MikroTik router data to MQTT tools 
 * power - Power appliances monitoring via NUT's upsc command line interface. Many options to report.
 * storage - Collecting S.M.A.R.T. data from nagios check_ide_smart and smartctl.
 

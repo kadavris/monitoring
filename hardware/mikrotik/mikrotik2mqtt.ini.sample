@@ -26,9 +26,14 @@ sender = /etc/smarthome/mqtt/mqtt --stdin --quiet router-reports
 
 port = 22
 
+# Now, internal processing distinguishes devices by their IP only.
+# The section name is almost dummy thing, unless you will be using Home Assistant
+# and the sensors yaml autogeneration script.
+# In this case the script will use the section names as a part of entity names
 [router1]
 #disable = true
 ip = 1.1.1.1
+# NOTE: use non-admin user with read-only permissions for the better security
 user = user
 password = password
 
@@ -37,3 +42,13 @@ topic_root = hw/router/router1
 
 # for which interfaces to collect traffic data: space separated list
 get_traffic = wan_bridge lan_bride wlan_bridge
+
+#TODO: query firewall rules that drop/reject/tarpit packets
+#get_firewall_drops=true
+
+# TODO: Will produce a listing of rules that match your queries.
+# The action is /ip firewall filter print stats where QUERY
+# XXX, YYY and so on is just the user-defined suffixes to make keys distinct
+#get_firewall_whereXXX=option[,option...],query
+#get_firewall_whereYYY=option[,option...],other_query
+# and so on

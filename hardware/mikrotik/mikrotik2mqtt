@@ -490,7 +490,13 @@ def get_traffic() -> bool:
 
     :return: bool: False for problems
     """
-    global CONFIG
+    global CONFIG, traffic_stats
+
+    # Using traffic_stats cache will add computed deltas for these parameters to better show variations
+    want_deltas = ['rx-byte', 'tx-byte', 'rx-error', 'tx-error',
+        'rx-drop', 'tx-drop', 'rx-packet', 'tx-packet',
+        'fp-rx-byte', 'fp-tx-byte', 'fp-rx-packet', 'fp-tx-packet',
+        'link-downs', 'tx-queue-drop']
 
     for interface in CONFIG['get_traffic'].split():
         ans = get_command_output('/interface print stats-detail from=' + interface)
@@ -522,6 +528,21 @@ def get_traffic() -> bool:
             val = val.strip()
             if re.match(r'[\d\s]+$', val):   # value is digits only
                 val = val.replace(' ', '')
+
+                # adding deltas
+                if var in want_deltas:
+                    delta_name = var + '-delta'
+                    delta_val = 0
+                    tstats_key = interface + delta_name
+
+                    if tstats_key in traffic_stats:  # computing diff
+                        delta_val = int(val) - traffic_stats[tstats_key]
+                        if delta_val < 0:  # stats reset on router?. just in case
+                            delta_val = 0
+
+                    traffic_stats[tstats_key] = int(val)
+                    out += '"' + delta_name + '":' + str(delta_val) + ','
+
             elif val[0] != '"':
                 val = '"' + val + '"'
 
@@ -534,13 +555,60 @@ def get_traffic() -> bool:
 
 
 ####################################################
+def firewall_where(query: str, options: list=None) -> list:
+    """
+    Will process free query with the fixed prefix:
+    /ip firewall filter print stats where QUERY
+    The usual output loks like is:
+    Flags: X - disabled, I - invalid, D - dynamic
+     #     CHAIN                                                ACTION       BYTES         PACKETS
+     0    ;;; Disable inet for some source addresses
+          forward                                                reject           0               0
+     1    ;;; Drop tries to reach not public addresses from LAN
+          forward                                                drop         73 643           1 106
+    10    ;;; WAN: TCP - DoS Attack Supression - Tarpit BlackList
+          inet-in                                                tarpit            0               0
+
+    :param: query: str - which query to run
+    :param: options: list - processing flags:
+            'pack' - pack all lines data into one output record
+    :return: list of sets: (name, action, bytes, packets)
+    """
+
+####################################################
+def firewall_drops() -> None:
+    """
+    2nd level of firewall check routines:
+    Will do /ip firewall filter print stats where action=drop or action=tarpit or action=reject
+    :return: None
+    """
+    firewall_where('action=drop or action=tarpit or action=reject')
+
+
+####################################################
+def check_firewall() -> None:
+    """
+    Starting point for firewall checks
+
+    :return: None
+    """
+
+    if conf_vars_is_set(['get_firewall_drops']):
+        firewall_drops()
+
+    for key in CONFIG:
+        if key[0:18] == 'get_firewall_where':
+            flags, query = CONFIG[key].split(',')
+            firewall_where(query, flags)
+
+####################################################
 def poll_device() -> None:
     """
     Do all reqquested data retrievals for the single device
 
     :return: None
     """
-    global CONFIG
+    global CONFIG, Dates_json
 
     if conf_vars_is_set(['get_voltage', 'topic_voltage']) or conf_vars_is_set(['get_temperature', 'topic_temperature']):
         get_hardware_info()
@@ -563,7 +631,7 @@ config_path = '/etc/smarthome/reporters/mikrotik2mqtt.ini'  # default
 parser = argparse.ArgumentParser(
     description='Queries MikroTik router(s) for various data and pushes it to the mqtt agent.\n' +
                 'Copyright by Andrej Pakhutin (pakhutin <at> gmail)\n' +
-                'V1.000')
+                'V1.001')
 parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
                     help='path to non-default (' + config_path + ') config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
@@ -582,6 +650,7 @@ signal.signal(signal.SIGINT, handle_termination)
 signal.signal(signal.SIGTERM, handle_termination)
 
 conn_states = {}
+traffic_stats = {}
 
 spawn_sender()
 
@@ -593,9 +662,6 @@ if ARGS.debug:
 
 ##################################
 # set necessary defaults
-if ARGS.loop > 0:
-    CONFIG['report_interval'] = str(ARGS.loop)
-
 if 'report_interval' not in CONFIG:
     CONFIG['report_interval'] = '60'
 
@@ -626,7 +692,7 @@ while True:  # main loop
     if not ARGS.loop:
         break
 
-    time.sleep(int(CONFIG['report_interval']))
+    time.sleep(float(CONFIG['report_interval']))
 
 # Wrapping up
 try:

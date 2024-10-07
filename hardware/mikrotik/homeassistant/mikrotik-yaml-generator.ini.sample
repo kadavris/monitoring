@@ -1,15 +1,20 @@
 # Where is the .ini of mikrotik2mqtt
 ini=/etc/smarthome/reporters/mikrotik2mqtt.ini
 
+# Looks like its in Celsius degrees.
+# IDK if router can be configured to output F.
+# However we can program conversion template if asked nicely. ;)
 overheat=59
 
-# good range
+# TODO: good range
 voltage_low=10
 voltage_high=55
 
 # Make those entities about the traffic:
-traffic_entities=rx-byte tx-byte rx-error tx-error
-# last-link-up-time link-downs
+traffic_entities=rx-error tx-error rx-byte-delta tx-byte-delta rx-error-delta tx-error-delta rx-drop-delta tx-drop-delta
+
+#last-link-up-time
+#link-downs
 #rx-drop
 #tx-drop
 #rx-packet
@@ -19,3 +24,14 @@ traffic_entities=rx-byte tx-byte rx-error tx-error
 #fp-tx-byte
 #fp-rx-packet
 #fp-tx-packet
+#link-downs-delta
+#rx-packet-delta
+#tx-packet-delta
+#tx-queue-drop-delta
+#fp-rx-byte-delta
+#fp-tx-byte-delta
+#fp-rx-packet-delta
+#fp-tx-packet-delta
+
+#traffic_scale_byte=KB, MB, GB, TB - scale byte values to larger units.
+#traffic_scale_quantities=KB, MB, GB, TB - scale other quantity stuff up

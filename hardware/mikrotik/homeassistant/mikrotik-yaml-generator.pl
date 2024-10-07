@@ -2,6 +2,13 @@
 use warnings;
 use strict;
 use Config::Tiny;
+# This is companion for mikrotik2mqtt script
+# that queries router for various data and pushes it to the mqtt agent.
+# Now this script is made for automatically create sensor definition for Home Assistant
+# using mikrotic2mqtt configuration.
+# Copyright by Andrej Pakhutin (pakhutin <at> gmail)
+# http://github.com/kadavris/monitoring
+# License: see accompanying LICENSE file
 
 # https://www.home-assistant.io/integrations/sensor.mqtt/#new_format
 # Put this script into HA config folder.
@@ -10,13 +17,14 @@ use Config::Tiny;
 #  sensor: !include_dir_merge_list inc/mqtt/sensor
 #sensor: !include_dir_merge_list inc/sensor/
 
-
 ##################################################
 # MAIN
 # Open the config
 my $config = Config::Tiny->read( 'mikrotik-yaml-generator.ini', 'utf8' );
+defined($config) or die("own .ini problem!");
 
 my $m2q_config = Config::Tiny->read( $config->{_}->{ 'ini' }, 'utf8' );
+defined($m2q_config) or die("m2q .ini problem!");
 
 for my $host ( keys( %$m2q_config ) )
 {
@@ -33,7 +41,7 @@ for my $host ( keys( %$m2q_config ) )
     my $yaml_mqtt_file = "inc/mqtt/sensor/mqtt-sensor-mikrotik-$host-autogen.yaml";
     my $yaml_sensors_file = "inc/sensor/sensor-mikrotik-$host-autogen.yaml";
 
-    if ( -f $yaml_mqtt_file )
+    if ( 0 )#-f $yaml_mqtt_file )
     {
         print "File $yaml_mqtt_file already exists. Overwrite (y/N)? ";
 
@@ -129,15 +137,29 @@ for my $host ( keys( %$m2q_config ) )
 - name: "${host}: $interface: $traffic_ent"
   state_topic: "$topic"
   json_attributes_topic: "$topic"
-  value_template: "{{ state_attr( 'sensor.$sensor', '${traffic_ent}' ) }}"
 ~;
             if ( grep( /^$traffic_ent$/, qw~rx-byte tx-byte fp-rx-byte fp-tx-byte~) )
             {
-                print $yaml_mqtt_h qq~  device_class: data_size\n  unit_of_measurement: "B"\n~;
+                my $unit = make_scaled_sensor_attr($sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
+                print $yaml_mqtt_h qq~  device_class: data_size\n  unit_of_measurement: "$unit"\n~;
+                print $yaml_mqtt_h qq~  state_class: total_increasing\n~;
             }
             elsif ( grep( /^$traffic_ent$/, qw~rx-packet tx-packet fp-rx-packet fp-tx-packet~ ))
             {
+                print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$sensor', '$traffic_ent' ) }}"\n~;
                 print $yaml_mqtt_h qq~  unit_of_measurement: "Packets"\n~;
+                print $yaml_mqtt_h qq~  state_class: total_increasing\n~;
+            }
+            elsif ( $traffic_ent =~ /delta$/ )
+            {
+                my $unit = make_scaled_sensor_attr($sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
+                print $yaml_mqtt_h qq~  state_class: measurement\n~;
+                print $yaml_mqtt_h qq~  device_class: data_size\n  unit_of_measurement: "$unit"\n~;
+            }
+            else
+            {
+                print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$sensor', '$traffic_ent' ) }}"\n~;
+                print $yaml_mqtt_h qq~  state_class: measurement\n~;
             }
 
             #rx-error tx-error link-downs
@@ -195,6 +217,23 @@ for my $host ( keys( %$m2q_config ) )
 } # for my $host
 
 print "\n";
+
+##################################################
+sub make_scaled_sensor_attr
+{
+    my ($sensor, $attr, $unit, $cfgkey, $file) = @_;
+
+    my %factors = ( 'KB'=>1024, 'MB'=>1024*1024, 'GB'=>1024*1024*1024, 'TB'=>1024*1024*1024*1024 );
+
+    print $file qq~  value_template: "{{ float(state_attr( 'sensor.$sensor', '$attr' )~;
+    if ( defined($config->{_}->{$cfgkey} ) )
+    {
+        $unit = uc($config->{_}->{$cfgkey});
+        print $file ' / ', $factors{ $unit };
+    }
+    print $file qq~,3) }}"\n~;
+    return $unit;
+}
 
 ##################################################
 # get mikrotik2mqtt config key, minding the DEFAULT section
