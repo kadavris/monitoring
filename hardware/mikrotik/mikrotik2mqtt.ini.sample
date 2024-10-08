@@ -43,12 +43,21 @@ topic_root = hw/router/router1
 # for which interfaces to collect traffic data: space separated list
 get_traffic = wan_bridge lan_bride wlan_bridge
 
-#TODO: query firewall rules that drop/reject/tarpit packets
-#get_firewall_drops=true
+# Firewall:
+# Will find all firewall rules having the STATID:field_name tags in comments
+# and produce nice json out of it
+# The value of this option is the topic name.
+# !WARNING! stats printing routine truncates long commentary.
+# !Means that it is safer to put STATID: tag at the beginning of the commentary
+get_firewall_by_id=firewall/byid
 
-# TODO: Will produce a listing of rules that match your queries.
-# The action is /ip firewall filter print stats where QUERY
+# Will produce a listing of rules that match your queries.
+# The action is /ip firewall filter print stats where YOURQUERYHERE
 # XXX, YYY and so on is just the user-defined suffixes to make keys distinct
-#get_firewall_whereXXX=option[,option...],query
-#get_firewall_whereYYY=option[,option...],other_query
+# Options:
+#    pack - pack all output datat lines counts to the single line. Default
+#    topic:topicname - set the topic name. default is the value from 'get_firewall_by_id'
+#    name:fieldname - json field prefix. will produce name-bytes and name-packets pair
+#get_firewall_whereXXX=[option[,option...],]query
+#get_firewall_whereYYY=[option[,option...],]other_query
 # and so on

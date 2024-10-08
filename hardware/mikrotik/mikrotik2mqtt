@@ -318,6 +318,7 @@ def open_connection() -> bool:
 
     return True
 
+
 ####################################################
 def send_command(cmd: str) -> None:
     """
@@ -494,9 +495,9 @@ def get_traffic() -> bool:
 
     # Using traffic_stats cache will add computed deltas for these parameters to better show variations
     want_deltas = ['rx-byte', 'tx-byte', 'rx-error', 'tx-error',
-        'rx-drop', 'tx-drop', 'rx-packet', 'tx-packet',
-        'fp-rx-byte', 'fp-tx-byte', 'fp-rx-packet', 'fp-tx-packet',
-        'link-downs', 'tx-queue-drop']
+                   'rx-drop', 'tx-drop', 'rx-packet', 'tx-packet',
+                   'fp-rx-byte', 'fp-tx-byte', 'fp-rx-packet', 'fp-tx-packet',
+                   'link-downs', 'tx-queue-drop']
 
     for interface in CONFIG['get_traffic'].split():
         ans = get_command_output('/interface print stats-detail from=' + interface)
@@ -555,11 +556,11 @@ def get_traffic() -> bool:
 
 
 ####################################################
-def firewall_where(query: str, options: list=None) -> list:
+def firewall_where(query: str, options: list) -> list:
     """
     Will process free query with the fixed prefix:
-    /ip firewall filter print stats where QUERY
-    The usual output loks like is:
+    /ip firewall filter print stats without-paging where QUERY
+    The usual output looks like is:
     Flags: X - disabled, I - invalid, D - dynamic
      #     CHAIN                                                ACTION       BYTES         PACKETS
      0    ;;; Disable inet for some source addresses
@@ -571,18 +572,54 @@ def firewall_where(query: str, options: list=None) -> list:
 
     :param: query: str - which query to run
     :param: options: list - processing flags:
-            'pack' - pack all lines data into one output record
-    :return: list of sets: (name, action, bytes, packets)
+            'pack' - pack all line's data into single output record
+    :return: list of sets: (name, bytes, packets)
     """
 
+    ans = get_command_output('/ip firewall filter print stats without-paging where ' + query)
+    ans.pop(0)
+    ans.pop(0)
+    name = ''  # field name if set
+    ret = []  # return stats list
+    for line in ans:
+        if re.match(r'\s*\d+\s*', line):  # commentary line
+            if m := re.search(r'STATID:\s*([-\w]+)', line):  # got a clean json field name
+                name = m.group(1)
+                print('+D STATID:',name)
+            else:
+                name = ''
+        else:  # data line
+            data = re.sub(r'(\d)\s(\d)', r'\1\2', line).split()  # culling readability spaces in numbers
+
+            if 'pack' in options:
+                if len(ret) == 0:
+                    ret.append(['', data[2], data[3]])  # bytes/packets
+                else:
+                    ret[0][1] += int(data[2])
+                    ret[0][2] += int(data[3])
+            else:
+                ret.append([name, data[2], data[3]])
+
+    return ret
+
+
 ####################################################
-def firewall_drops() -> None:
+def firewall_by_id() -> str:
     """
     2nd level of firewall check routines:
-    Will do /ip firewall filter print stats where action=drop or action=tarpit or action=reject
-    :return: None
+    Will find all firewall rules having the STATID:field_name tags in comments
+    and produce nice json out of it
+
+    :return: str: json-ready list of fields w/o leading/ending brakets
     """
-    firewall_where('action=drop or action=tarpit or action=reject')
+    global CONFIG
+
+    result = firewall_where('comment~"STATID:"', [])
+    ret = ''
+    for i in result:
+        ret += '"' + i[0] + '-bytes":' + str(i[1]) + ', "' + i[0] + '-packets":' + str(i[2]) + ','
+
+    return ret.rstrip(',')
 
 
 ####################################################
@@ -593,13 +630,41 @@ def check_firewall() -> None:
     :return: None
     """
 
-    if conf_vars_is_set(['get_firewall_drops']):
-        firewall_drops()
+    msgs = {}
+    if conf_vars_is_set(['get_firewall_by_id']):
+        msgs[CONFIG['get_firewall_by_id']] = firewall_by_id()
 
     for key in CONFIG:
         if key[0:18] == 'get_firewall_where':
-            flags, query = CONFIG[key].split(',')
-            firewall_where(query, flags)
+            flags = CONFIG[key].split(',')
+            query = flags.pop()
+            flags.append('pack')
+
+            data = firewall_where(query, flags)
+
+            if m := re.match(r'name:([^,\s]+)]', ','.join(flags)):
+                name = m.group(0)
+            else:
+                name = key[18:-1]
+
+            if m := re.match(r'topic:([^,\s]+)]', ','.join(flags)):
+                topic = m.group(0)
+            else:
+                topic = CONFIG['get_firewall_by_id']
+
+            if topic not in msgs:
+                msgs[topic] = ''
+
+            msgs[topic] += '"' + name + '-bytes":' + str(data[1]) + ', "' + \
+                           name + '-packets":' + str(data[2]) + ','
+
+    for topic in msgs:
+        if msgs[topic].strip() == '':
+            continue
+
+        send_message_short(make_topic_path(topic),
+                           '{' + re.sub(r'"', r'\"', msgs[topic]) + '}', retain=False)
+
 
 ####################################################
 def poll_device() -> None:
@@ -619,6 +684,8 @@ def poll_device() -> None:
     if conf_vars_is_set(['get_traffic', 'topic_traffic']):
         get_traffic()
 
+    check_firewall()
+
     send_message_short(make_topic_path('updated'), Dates_json, retain=True)
 
 
@@ -631,7 +698,7 @@ config_path = '/etc/smarthome/reporters/mikrotik2mqtt.ini'  # default
 parser = argparse.ArgumentParser(
     description='Queries MikroTik router(s) for various data and pushes it to the mqtt agent.\n' +
                 'Copyright by Andrej Pakhutin (pakhutin <at> gmail)\n' +
-                'V1.001')
+                'V1.100')
 parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
                     help='path to non-default (' + config_path + ') config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
