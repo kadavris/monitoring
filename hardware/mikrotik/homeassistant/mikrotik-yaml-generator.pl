@@ -5,7 +5,7 @@ use Config::Tiny;
 # This is companion for mikrotik2mqtt script
 # that queries router for various data and pushes it to the mqtt agent.
 # Now this script is made for automatically create sensor definition for Home Assistant
-# using mikrotic2mqtt configuration.
+# using mikrotik2mqtt configuration.
 # Copyright by Andrej Pakhutin (pakhutin <at> gmail)
 # http://github.com/kadavris/monitoring
 # License: see accompanying LICENSE file
@@ -23,15 +23,15 @@ use Config::Tiny;
 my $config = Config::Tiny->read( 'mikrotik-yaml-generator.ini', 'utf8' );
 defined($config) or die("own .ini problem!");
 
-my $m2q_config = Config::Tiny->read( $config->{_}->{ 'ini' }, 'utf8' );
-defined($m2q_config) or die("m2q .ini problem!");
+my $m2mq_config = Config::Tiny->read( $config->{_}->{ 'ini' }, 'utf8' );
+defined($m2mq_config) or die("m2q .ini problem!");
 
-for my $host ( keys( %$m2q_config ) )
+for my $host ( keys( %$m2mq_config ) )
 {
     next if $host eq 'DEFAULT';
     $host = lc($host);
     print "\n$host: ";
-    my $disabled = lc(get_key($host, 'disabled'));  # disable = true
+    my $disabled = lc(get_m2mq_key($host, 'disable'));  # disable = true
     if ( $disabled ne '' && $disabled ne 'false' )
     {
         print "DISABLED\n";
@@ -86,41 +86,39 @@ for my $host ( keys( %$m2q_config ) )
     # putting general data first
     print $yaml_mqtt_h qq~
 - name: "$host: state"
-  state_topic: "~, get_key($host, 'topic_root'), qq~"
+  state_topic: "~, get_m2mq_key($host, 'topic_root'), qq~"
 
 # data freshness
 - name: "$host: last update"
-  state_topic: "~, get_key($host, 'topic_root') . '/updated', qq~"
-  json_attributes_topic: "~, get_key($host, 'topic_root') . '/updated', qq~"
+  state_topic: "~, get_m2mq_key($host, 'topic_root') . '/updated', qq~"
+  json_attributes_topic: "~, get_m2mq_key($host, 'topic_root') . '/updated', qq~"
   value_template: "{{ value_json.timestamp }}"
 
 - name: "$host: temperature"
-  state_topic: "~, get_full_topic_path($host, 'topic_temperature'), qq~"
+  state_topic: "~, make_full_topic_path($host, 'topic_temperature'), qq~"
   unit_of_measurement: '°C'
   device_class: temperature
 
 - name: "$host: PSU voltage"
-  state_topic: "~, get_full_topic_path($host, 'topic_voltage'), qq~"
+  state_topic: "~, make_full_topic_path($host, 'topic_voltage'), qq~"
   unit_of_measurement: 'V'
   device_class: voltage
 ~;
 
-    my $topic_upgrades = get_key($host, 'topic_upgrades');
+    my $topic_upgrades = get_m2mq_key($host, 'topic_upgrades');
 
     if ( $topic_upgrades ne '' )
     {
-        print $yaml_mqtt_h qq~
-- name: "$host: upgrades available"
-  state_topic: "~, get_full_topic_path($host, 'topic_upgrades'), qq~"
-~;
+        print $yaml_mqtt_h "\n- name: \"$host: upgrades available\"\n",
+            "  state_topic: \"", make_full_topic_path($host, 'topic_upgrades'), "\n";
     }
 
-    for my $interface ( split(/\s+/, get_key($host, 'get_traffic') ) )
+    for my $interface ( split(/\s+/, get_m2mq_key($host, 'get_traffic') ) )
     {
         $interface = lc($interface);
         print " $interface";
 
-        my $topic = get_full_topic_path($host, 'topic_traffic') . '/' . $interface;
+        my $topic = make_full_topic_path($host, 'topic_traffic') . '/' . $interface;
 
         print $yaml_mqtt_h qq~
 - name: "${host}: $interface"
@@ -133,7 +131,6 @@ for my $host ( keys( %$m2q_config ) )
             my $sensor = lc("${host}_${interface}");
             $sensor =~ s/\W+/_/g;
             print $yaml_mqtt_h qq~
-# $interface -> $traffic_ent
 - name: "${host}: $interface: $traffic_ent"
   state_topic: "$topic"
   json_attributes_topic: "$topic"
@@ -141,14 +138,14 @@ for my $host ( keys( %$m2q_config ) )
             if ( grep( /^$traffic_ent$/, qw~rx-byte tx-byte fp-rx-byte fp-tx-byte~) )
             {
                 my $unit = make_scaled_sensor_attr($sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
-                print $yaml_mqtt_h qq~  device_class: data_size\n  unit_of_measurement: "$unit"\n~;
-                print $yaml_mqtt_h qq~  state_class: total_increasing\n~;
+                print $yaml_mqtt_h "  device_class: data_size\n  unit_of_measurement: \"$unit\"\n";
+                print $yaml_mqtt_h "  state_class: total_increasing\n";
             }
             elsif ( grep( /^$traffic_ent$/, qw~rx-packet tx-packet fp-rx-packet fp-tx-packet~ ))
             {
                 print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$sensor', '$traffic_ent' ) }}"\n~;
-                print $yaml_mqtt_h qq~  unit_of_measurement: "Packets"\n~;
-                print $yaml_mqtt_h qq~  state_class: total_increasing\n~;
+                print $yaml_mqtt_h "  unit_of_measurement: \"Packets\"\n";
+                print $yaml_mqtt_h "  state_class: total_increasing\n";
             }
             elsif ( $traffic_ent =~ /delta$/ )
             {
@@ -166,11 +163,59 @@ for my $host ( keys( %$m2q_config ) )
             #rx-drop tx-drop tx-queue-drop
             #'last-link-up-time'
         } # for my $traffic_ent
-    } # for my $interface
+    } # for my $interface (get_traffic)
+    
+    # -------------------------------------------------
+    # Firewall:
+    my $fw_topic = get_m2mq_key($host, 'get_firewall_by_id');
+    if ( $fw_topic ne '' )
+    {
+        print " Firewall by STATID";
 
-# NOTE:
-# There is expire_after <seconds> attribute for mqtt sensor
-# that we can use to check if data is fresh: state will be 'unavailable' if stale
+        print $yaml_mqtt_h "$separator# Firewall section:\n";
+
+        $fw_topic = make_full_topic_path($host, 'get_firewall_by_id');
+
+        print $yaml_mqtt_h "- name: \"$host: Firewall stats by id\"\n", # fix $sensor if chnged!
+            "  state_topic: \"$fw_topic\"\n",
+            "  json_attributes_topic: \"$fw_topic\"\n";
+
+        my $sensor = lc("${host}_firewall_stats_by_id");
+        $sensor =~ s/\W+/_/g;
+
+        # generating entities derived from json
+        for my $field (split(/\s+/, $config->{_}->{'firewall_by_id'}))
+        {
+            my $entity = $field . '-bytes';
+            print $yaml_mqtt_h qq~\n- name: "${host}: firewall: $entity"\n~,
+                "  state_topic: \"$fw_topic\"\n",
+                "  json_attributes_topic: \"$fw_topic\"\n";
+
+            my $unit = make_scaled_sensor_attr($sensor, $entity, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
+            print $yaml_mqtt_h "  device_class: data_size\n  unit_of_measurement: \"$unit\"\n";
+            print $yaml_mqtt_h "  state_class: measurement\n";
+
+            $entity = $field . '-packets';
+            print $yaml_mqtt_h qq~- name: "${host}: firewall: $entity"\n~,
+                "  state_topic: \"$fw_topic\"\n",
+                "  json_attributes_topic: \"$fw_topic\"\n";
+
+            print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$sensor', '$entity' ) }}"\n~;
+            print $yaml_mqtt_h "  device_class: data_size\n";
+            # Make it "PB" so the statistics widget will be happy... or I'm choosing the wrong card again?...
+            print $yaml_mqtt_h "  unit_of_measurement: \"PB\"\n";
+            print $yaml_mqtt_h "  state_class: measurement\n";
+        }
+
+        print $yaml_mqtt_h "$separator"
+    }
+
+    # -------------------------------------------------
+    # General sensor definitions and helpers:
+
+    # NOTE:
+    # There is expire_after <seconds> attribute for mqtt sensor
+    # that we can use to check if data is fresh: state will be 'unavailable' if stale
     print $yaml_sensors_h qq~
 - platform: template
   sensors:
@@ -238,16 +283,16 @@ sub make_scaled_sensor_attr
 ##################################################
 # get mikrotik2mqtt config key, minding the DEFAULT section
 # params: section, key
-sub get_key
+sub get_m2mq_key
 {
     my ($section, $key) = @_;
-    if( defined( $m2q_config->{$section}->{$key} ) )
+    if( defined( $m2mq_config->{$section}->{$key} ) )
     {
-        return $m2q_config->{$section}->{$key};
+        return $m2mq_config->{$section}->{$key};
     }
-    elsif (defined( $m2q_config->{'DEFAULT'}->{$key} ))
+    elsif (defined( $m2mq_config->{'DEFAULT'}->{$key} ))
     {
-        return $m2q_config->{'DEFAULT'}->{$key};
+        return $m2mq_config->{'DEFAULT'}->{$key};
     }
     return '';
 }
@@ -255,14 +300,14 @@ sub get_key
 ##################################################
 # construct full mqtt topic for the config key, minding the DEFAULT section
 # params: section, topic_key
-sub get_full_topic_path
+sub make_full_topic_path
 {
     my ($section, $topic_key) = @_;
-    my $t = get_key($section, $topic_key);
+    my $t = get_m2mq_key($section, $topic_key);
     if ($t eq '')
     {
-        die("get_full_topic_path() invalid topic variable: ", @_)
+        die("make_full_topic_path() invalid topic variable: sec: '", $section, "', tkey: '", $topic_key, "'")
     }
 
-    return get_key($section, 'topic_root') . '/' . $t;
+    return get_m2mq_key($section, 'topic_root') . '/' . $t;
 }

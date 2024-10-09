@@ -35,3 +35,11 @@ traffic_entities=rx-error tx-error rx-byte-delta tx-byte-delta rx-error-delta tx
 
 #traffic_scale_byte=KB, MB, GB, TB - scale byte values to larger units.
 #traffic_scale_quantities=KB, MB, GB, TB - scale other quantity stuff up
+
+# Note about the firewall stats:
+# Now you see, these are derived directly from router's firewall,
+# so we just cannot retrieve it automagically.
+# 2nd note: stat names are generated with automatically added suffixes:
+# -packets ad -bytes. So here you need to enter only the prefix/main part
+firewall_by_id=inet-invalid inet-invalid inet-non-public inet-synflood tarpit inet-drop-blacklisted inet-tcp-lowport inet-udp-lowport inet-unknown
+
