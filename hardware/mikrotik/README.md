@@ -1,13 +1,15 @@
-# mikrotik2mqtt - Collecting hardware state and net statistics from MikroTik router(s)
-Tested under Fedora Linux  
+# mikrotik2mqtt - Collecting hardware state and network statistics from the MikroTik router(s)
+Tested under Fedora Linux 40+   
 Requires:
 * python3
 * SSH module (https://github.com/ParallelSSH/ssh-python)  
 
 ## Slightly longer intro
-This script produces reports on a MikroTik brand router's:
+This script uses SSH to access the MikroTik brand router's and produces several kinds of reports:
 1) Health: temperature and PSU voltage
 2) Network statistics per interface specified
+3) Firewall counts for the rules that have a special tag in comment
+4) User-defined firewall queries
 
 And passes it to the [MQTT](https://en.wikipedia.org/wiki/MQTT) publishing agent.  
 Specifically, the [mqtt-tool](https://github.com/kadavris/mqtt) was designed to be usable in this case.  
@@ -17,24 +19,38 @@ Although you can use any other program that does your own bidding.
 The default directory for .ini placement is `/etc/smarthome/reporters/`
 and default config name is `/etc/smarthome/reporters/mikrotik.ini`
 
-Please look into provided `mikrotik.ini.sample` file for the description of configurable options.  
+See the [.ini file sample](mikrotik2mqtt.ini.sample) for options with actual names and verbose description  
 
 ### The MQTT hierarchy tree
-See .ini file for options with actual names  
+
 All things are nested under the .ini's `topic_root`.
+**NOTE! You need to configure it to be different for each of the monitored routers.**
+Or there be a mess. You've been warned.
 
-**NOTE! You need to configure it to be different for each of monitored routers.**   
+Information of available upgrades for hardware/packages can be put there
+if you configured `topic_upgrades`
 
-Information of available upgrades to hardware/packages can be put there
-if you didn't configured `topic_upgrades`
-
-Then there are topics dedicated to bear specific bits of data, that should be available without the need of parsing:
+Then there are topics dedicated to bear specific bits of data, that should be available without the need of JSON parsing:
 * `<topic_voltage>` - device's PSU voltage
 * `<topic_temperature>` - degrees of Celsius
-* `<topic_traffic>` - top of traffic statistics hierarchy
-* `<root_topic/updated>` - When any of this device's hierarchy was last updated:
-  `{ "date":"Human readable date/time", "timestamp":UNIX_timestamp }`
 
+The topics that provide networking stats:
+* `<topic_traffic>` - top of the traffic statistics hierarchy
+* `<get_firewall_by_id>` - JSON of tagged firewall rules
+* `<get_firewall_whereXXX>` - user-defined queries
+
+Additionally, there is special topic that lets you see if the data is fresh:
+`<root_topic/updated>`  
+The package format is:
+`{ "date":"Human readable date/time", "timestamp":UNIX_timestamp }`
+
+---
+# [Home assistant integration](homeassistant)
+
+The perl script is provided for automatic generation of Sensors/Entities
+using it's own and of the main tool .ini files. 
+
+---
 The repo is in <https://github.com/kadavris/monitoring>  
 Copyright by Andrej Pakhutin (pakhutin at gmail)  
-See LICENSE file for licensing information
+See the LICENSE file for licensing information
