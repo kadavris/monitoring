@@ -99,3 +99,4 @@
   state_topic: "hw/power/main/updated"
   json_attributes_topic: "hw/power/main/updated"
   value_template: "{{ value_json.timestamp }}"
+  device_class: timestamp

@@ -322,7 +322,6 @@ def check_nut() -> None:
     if 'devices' in CONFIG:
         dev_list = CONFIG['devices'].split()
     else:
-        # TODO: don't know if this even will work today
         if ARGS.debug:
             print('requesting the list of devices from upsc')
 
@@ -436,6 +435,9 @@ def check_nut() -> None:
 
 ####################################################
 # MAIN
+global Sender, GLOBAL_CONFIG
+
+
 config_path = '/etc/smarthome/reporters/reporters.ini'  # default
 
 parser = argparse.ArgumentParser(

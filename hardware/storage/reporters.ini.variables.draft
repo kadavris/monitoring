@@ -9,7 +9,7 @@
 The values will be normalized to adhere to allowed character set.
 Notably, the spaces will be replaced by underscores, etc.
 
-- $$device: Will be substituted with the device's name without /dev/ prefix. E.g. 'sda'
-- $$model: Current device's model name
-- $$serial:  Current device's serial number
+- $$device: device's name without /dev/ prefix. E.g. 'sda'
+- $$model: device's model name
+- $$serial: device's serial number
 
