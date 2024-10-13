@@ -120,48 +120,60 @@ for my $host ( keys( %$m2mq_config ) )
 
         my $topic = make_full_topic_path($host, 'topic_traffic') . '/' . $interface;
 
-        print $yaml_mqtt_h qq~
-- name: "${host}: $interface"
-  state_topic: "$topic"
-  json_attributes_topic: "$topic"
-~;
+        print $yaml_mqtt_h "\n- name: \"${host}: $interface\"\n";
+        print $yaml_mqtt_h "  state_topic: \"$topic\"\n";
+        print $yaml_mqtt_h "  json_attributes_topic: \"$topic\"\n";
+
         # what we want to see from the interface
         for my $traffic_ent ( split(/\s+/, $config->{_}->{'traffic_entities'}) )
         {
-            my $sensor = lc("${host}_${interface}");
+            my $main_sensor = lc("${host}_${interface}");
+            $main_sensor =~ s/\W+/_/g;
+
+            my $name = "${host}: $interface: $traffic_ent";
+            my $sensor = lc($name);
             $sensor =~ s/\W+/_/g;
-            print $yaml_mqtt_h qq~
-- name: "${host}: $interface: $traffic_ent"
-  state_topic: "$topic"
-  json_attributes_topic: "$topic"
-~;
+
+            print $yaml_mqtt_h "\n- name: \"$name\"\n";
+            print $yaml_mqtt_h "  state_topic: \"$topic\"\n";
+            print $yaml_mqtt_h "  json_attributes_topic: \"$topic\"\n";
+
             if ( grep( /^$traffic_ent$/, qw~rx-byte tx-byte fp-rx-byte fp-tx-byte~) )
             {
-                my $unit = make_scaled_sensor_attr($sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
+                my $unit = make_scaled_sensor_attr($main_sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
                 print $yaml_mqtt_h "  device_class: data_size\n  unit_of_measurement: \"$unit\"\n";
                 print $yaml_mqtt_h "  state_class: total_increasing\n";
             }
             elsif ( grep( /^$traffic_ent$/, qw~rx-packet tx-packet fp-rx-packet fp-tx-packet~ ))
             {
-                print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$sensor', '$traffic_ent' ) }}"\n~;
+                print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$main_sensor', '$traffic_ent' ) }}"\n~;
                 print $yaml_mqtt_h "  unit_of_measurement: \"Packets\"\n";
-                print $yaml_mqtt_h "  state_class: total_increasing\n";
+                print $yaml_mqtt_h "  state_class: measurement\n";
+                print $yaml_mqtt_h "  icon: \"mdi:train-car-container\"\n";
             }
             elsif ( $traffic_ent =~ /delta$/ )
             {
-                my $unit = make_scaled_sensor_attr($sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
-                print $yaml_mqtt_h qq~  state_class: measurement\n~;
-                print $yaml_mqtt_h qq~  device_class: data_size\n  unit_of_measurement: "$unit"\n~;
+                my $unit = make_scaled_sensor_attr($main_sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
+                print $yaml_mqtt_h "  state_class: measurement\n";
+                print $yaml_mqtt_h "  device_class: data_size\n  unit_of_measurement: \"$unit\"\n";
+            }
+            elsif ( $traffic_ent =~ /(-error|-drop|link-downs)$/ ) # errors
+            {
+                print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$main_sensor', '$traffic_ent' ) }}"\n~;
+                print $yaml_mqtt_h "  unit_of_measurement: \"Count\"\n";
+                print $yaml_mqtt_h "  state_class: measurement\n";
+                print $yaml_mqtt_h "  icon: >\n";
+                print $yaml_mqtt_h "    {% if value == 0 %}\n";
+                print $yaml_mqtt_h "      mdi:lan-connect\n";
+                print $yaml_mqtt_h "    {% else %}\n";
+                print $yaml_mqtt_h "      mdi:lan-disconnect\n";
+                print $yaml_mqtt_h "    {% endif %}\n";
             }
             else
             {
-                print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$sensor', '$traffic_ent' ) }}"\n~;
+                print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$main_sensor', '$traffic_ent' ) }}"\n~;
                 print $yaml_mqtt_h qq~  state_class: measurement\n~;
             }
-
-            #rx-error tx-error link-downs
-            #rx-drop tx-drop tx-queue-drop
-            #'last-link-up-time'
         } # for my $traffic_ent
     } # for my $interface (get_traffic)
     
@@ -176,35 +188,38 @@ for my $host ( keys( %$m2mq_config ) )
 
         $fw_topic = make_full_topic_path($host, 'get_firewall_by_id');
 
-        print $yaml_mqtt_h "- name: \"$host: Firewall stats by id\"\n", # fix $sensor if chnged!
+        print $yaml_mqtt_h "- name: \"$host: Firewall stats by id\"\n", # fix $main_sensor if chnged!
             "  state_topic: \"$fw_topic\"\n",
             "  json_attributes_topic: \"$fw_topic\"\n";
 
-        my $sensor = lc("${host}_firewall_stats_by_id");
-        $sensor =~ s/\W+/_/g;
+        my $main_sensor = lc("${host}_firewall_stats_by_id");
+        $main_sensor =~ s/\W+/_/g;
 
         # generating entities derived from json
         for my $field (split(/\s+/, $config->{_}->{'firewall_by_id'}))
         {
             my $entity = $field . '-bytes';
-            print $yaml_mqtt_h qq~\n- name: "${host}: firewall: $entity"\n~,
-                "  state_topic: \"$fw_topic\"\n",
-                "  json_attributes_topic: \"$fw_topic\"\n";
+            print $yaml_mqtt_h "\n- name: \"${host}: firewall: $entity\"\n";
+            print $yaml_mqtt_h "  state_topic: \"$fw_topic\"\n";
+            print $yaml_mqtt_h "  json_attributes_topic: \"$fw_topic\"\n";
 
-            my $unit = make_scaled_sensor_attr($sensor, $entity, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
+            my $unit = make_scaled_sensor_attr($main_sensor, $entity, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
             print $yaml_mqtt_h "  device_class: data_size\n  unit_of_measurement: \"$unit\"\n";
             print $yaml_mqtt_h "  state_class: measurement\n";
 
             $entity = $field . '-packets';
-            print $yaml_mqtt_h qq~- name: "${host}: firewall: $entity"\n~,
-                "  state_topic: \"$fw_topic\"\n",
-                "  json_attributes_topic: \"$fw_topic\"\n";
+            print $yaml_mqtt_h "- name: \"${host}: firewall: $entity\"\n";
+            print $yaml_mqtt_h "  state_topic: \"$fw_topic\"\n";
+            print $yaml_mqtt_h "  json_attributes_topic: \"$fw_topic\"\n";
 
-            print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$sensor', '$entity' ) }}"\n~;
-            print $yaml_mqtt_h "  device_class: data_size\n";
-            # Make it "PB" so the statistics widget will be happy... or I'm choosing the wrong card again?...
-            print $yaml_mqtt_h "  unit_of_measurement: \"PB\"\n";
+            print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$main_sensor', '$entity' ) }}"\n~;
+            # The HA forum told me:
+            # "Leave the device_class at none, and you can add any unit_of_measurement you want. Then just change the icon."
+            # https://community.home-assistant.io/t/unit-of-measurement-variants-lacks-packets-and-maybe-some-other-networking-units/780895/4?u=kadavris
+            #print $yaml_mqtt_h "  device_class: data_size\n";
+            print $yaml_mqtt_h "  unit_of_measurement: \"Packets\"\n";
             print $yaml_mqtt_h "  state_class: measurement\n";
+            print $yaml_mqtt_h "  icon: \"mdi:train-car-container\"\n";
         }
 
         print $yaml_mqtt_h "$separator"
@@ -266,11 +281,11 @@ print "\n";
 ##################################################
 sub make_scaled_sensor_attr
 {
-    my ($sensor, $attr, $unit, $cfgkey, $file) = @_;
+    my ($main_sensor, $attr, $unit, $cfgkey, $file) = @_;
 
     my %factors = ( 'KB'=>1024, 'MB'=>1024*1024, 'GB'=>1024*1024*1024, 'TB'=>1024*1024*1024*1024 );
 
-    print $file qq~  value_template: "{{ float(state_attr( 'sensor.$sensor', '$attr' )~;
+    print $file qq~  value_template: "{{ float(state_attr( 'sensor.$main_sensor', '$attr' )~;
     if ( defined($config->{_}->{$cfgkey} ) )
     {
         $unit = uc($config->{_}->{$cfgkey});
