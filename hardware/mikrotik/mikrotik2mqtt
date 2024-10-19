@@ -541,6 +541,8 @@ def get_traffic() -> bool:
                         if delta_val < 0:  # stats reset on router?. just in case
                             delta_val = 0
 
+                    traffic_stats[delta_name] = delta_val
+
                     traffic_stats[tstats_key] = int(val)
                     out += '"' + delta_name + '":' + str(delta_val) + ','
 
@@ -551,6 +553,17 @@ def get_traffic() -> bool:
 
         send_message_short(make_topic_path(CONFIG['topic_traffic'], interface.lower()),
                            out.rstrip(',').replace('"', r'\"'), '}')
+
+        # determining the /state topic value
+        problems = ''
+        for problems_key in ['link-downs-delta', 'tx-queue-drop-delta', 'rx-drop-delta', 'tx-drop-delta']:
+            if not problems_key in traffic_stats:
+                problems = problems + ' WARN: No data for ' + problems_key
+            elif traffic_stats[problems_key] > 0:
+                problems = problems + ' ERRORS on ' + problems_key
+
+        send_message_short(make_topic_path(CONFIG['topic_traffic'], interface.lower() + '/state'),
+                           'OK' if problems == '' else problems)
 
     return True
 
@@ -585,7 +598,9 @@ def firewall_where(query: str, options: list) -> list:
         if re.match(r'\s*\d+\s*', line):  # commentary line
             if m := re.search(r'STATID:\s*([-\w]+)', line):  # got a clean json field name
                 name = m.group(1)
-                print('+D STATID:',name)
+
+                if ARGS.debug:
+                    print('+D STATID:', name)
             else:
                 name = ''
         else:  # data line
@@ -664,6 +679,9 @@ def check_firewall() -> None:
 
         send_message_short(make_topic_path(topic),
                            '{' + re.sub(r'"', r'\"', msgs[topic]) + '}', retain=False)
+
+        # for now just send vanishing 'OK'
+        send_message_short(make_topic_path(topic + '/state'), 'OK', retain=False)
 
 
 ####################################################
