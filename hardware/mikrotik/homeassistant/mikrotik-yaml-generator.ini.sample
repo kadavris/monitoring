@@ -43,3 +43,7 @@ traffic_entities=rx-error tx-error rx-byte-delta tx-byte-delta rx-error-delta tx
 # -packets ad -bytes. So here you need to enter only the prefix/main part
 firewall_by_id=inet-invalid inet-invalid inet-non-public inet-synflood tarpit inet-drop-blacklisted inet-tcp-lowport inet-udp-lowport inet-unknown
 
+# What icons to use when some errors/drop/etc counter going zero to something
+# Listed here are defaults
+#counters_icon_good=mdi:lan-connect
+#counters_icon_bad=mdi:lan-disconnect
