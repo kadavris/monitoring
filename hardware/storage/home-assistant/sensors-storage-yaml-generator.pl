@@ -123,7 +123,7 @@ for my $host ( keys( %$config ) )
       friendly_name: "$host: $d data freshness check"
       value_template: >-
         {% set topic_u = 'sensor.${host}_${d}_last_update' %}
-        {% if states( topic_u ) == 'unknown' %}
+        {% if states( topic_u )|float(default=-1.0) == -1.0 %}
           NO DATA!
         {% elif as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
           OLD: {{ state_attr( topic_u, 'date' ) }}
@@ -133,7 +133,7 @@ for my $host ( keys( %$config ) )
 
       icon_template: >-
         {% set topic_u = 'sensor.${host}_${d}_last_update' %}
-        {% if states( topic_u ) == 'unknown' %}
+        {% if states( topic_u )|float(default=-1.0) == -1.0 %}
           mdi:database-remove-outline
         {% elif as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
           mdi:disc-alert
@@ -152,7 +152,7 @@ for my $host ( keys( %$config ) )
           {% if states( 'sensor.${host}_${d}_mqtt_state' ) != 'OK' %}
             {{ states( 'sensor.${host}_${d}_mqtt_state' ) }}
           {% endif %}
-          {% if states( 'sensor.${host}_${d}_temperature' ) != 'unknown' %}
+          {% if states( 'sensor.${host}_${d}_temperature' )|float(default=-1.0) != -1.0 %}
             {% if states( 'sensor.${host}_${d}_type' ) == 'HDD' %}
               {% if states( 'sensor.${host}_${d}_temperature' )|float > $hdd_overheat %}
                 OVERHEATING: {{ states( 'sensor.${host}_${d}_temperature' ) }}
