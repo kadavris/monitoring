@@ -116,14 +116,14 @@ def spawn_sender() -> None:
     if args.debug:
         print("+ Spawning sender process:", config['sender'], file=sys.stderr)
 
-    sender = subprocess.Popen(shlex.split(config['sender']), bufsize=1,
+    sender=subprocess.Popen(config['sender'], bufsize=1,
                               # default buf size may gobble a whole loop of data and do nothing till the next
                               stdin=subprocess.PIPE,
                               stdout=None if args.debug or config['sender'].find('--debug')
                               else subprocess.STDOUT,
                               stderr=None if args.debug or config['sender'].find('--debug')
                               else subprocess.DEVNULL,
-                              text=True)
+                              shell=False, text=True)
 
     if sender.poll():  # poll() return None if process is still there
         print('? ERROR with running ', sender.args, ": exited ",
@@ -158,10 +158,10 @@ def send_message_raw(msg: str) -> None:
         except:
             if args.debug:
                 exc_type, exc_val, traceback = sys.exc_info()
-                if exc_val:
-                    exc_val = ','.join(exc_val.args)
-                else:
-                    exc_val = 'UNKNOWN REASON'
+                # if exc_val:
+                #     exc_val = ','.join(exc_val.args)
+                # else:
+                #     exc_val = 'UNKNOWN REASON'
                 print("! Sending failed (", exc_val, ")", file=sys.stderr)
 
             try_number += 1
@@ -517,6 +517,43 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 
 
 ########################################
+def run_smartctl(device: str, *in_params) -> []:
+    """
+    Prepares smartctl arguments and runs it
+
+    :param device: device. can be empty to run global queries
+    :param in_params: list of parameters
+    :return: ( 'results string', 'error message if any' )
+    """
+    global config
+
+    # preparing smartctl parameters:
+    params = [config["smartctl"]]
+    params.extend(in_params)
+
+    if device != '':
+        # looking if there are specific smartctl switches to add
+        for f in devices_cache[device]["scopts"]:
+            params.append(f)
+
+        params.append("/dev/" + device)
+
+    sctl = subprocess.Popen(params, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=False)
+
+    if sctl.poll():
+        ret = ''
+        if sctl.returncode > 0:
+            ret = 'smartctl error: ended with rc: ' + str(sctl.returncode)
+            print(ret)
+        return ('', ret)  # may be empty
+
+    ret, err = sctl.communicate()  # communicate() will return all output at once
+    sctl.terminate()
+
+    return (ret, err)
+
+
+########################################
 def do_smartctl(device: str, device_topic: str) -> dict:
     """
     Collects data from smartctl. Run parser. Post basic data.
@@ -545,25 +582,8 @@ def do_smartctl(device: str, device_topic: str) -> dict:
         "warnings": [],       # array of all warning conditions in string form
     }
 
-    # preparing smartctl parameters:
-    params = shlex.split(config["smartctl"])
-    params.append("-a")
-    params.append("-j")
+    json_string, err = run_smartctl(device, '-a', '-j')
 
-    # looking if there are specific smartctl switches to add
-    for f in devices_cache[device]["scopts"]:
-        params.append(f)
-
-    params.append("/dev/" + device)
-    sctl = subprocess.Popen(params, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    if sctl.poll():
-        if sctl.returncode > 0:
-            ret["status"] = ',"smartctl error":"ended with rc: ' + str(sctl.returncode) + '"'
-            print(ret["status"])
-        return ret
-
-    json_string, err = sctl.communicate()  # communicate() will return all output at once
     if err != "":
         ret["status"] = ',"smartctl error":"' + err + "'"
         print(ret["status"])
@@ -572,8 +592,6 @@ def do_smartctl(device: str, device_topic: str) -> dict:
     json_string.replace("\r\n", "\n")  # Fix win EOL
 
     process_sctl_json(json_string, ret, device_topic)
-
-    sctl.terminate()
 
     # send raw smart data. doing this anyway even if output is invalid, so it gets visible
     if "raw_smart_topic" in config:
@@ -599,42 +617,65 @@ def check_storage_sd() -> None:
     """
     global args, config, devices_cache
 
+    detected_devices = {}
+
     #  for cygwin we can filter out real drives like this
-    cygwin_real_drives = {}
     if sys.platform.startswith("cygwin"):
         partitions_file = open("/proc/partitions", newline="\n").read()
         for part in partitions_file.split("\n"):
             # major        minor        #blocks              name            win-mounts
             # 8            1            244196352            sda1            I:\
-            rm = re.search(r"^[\s\d]+(sd[a-z])\d+\s+([A-Z]:)", part)
+            rm = re.match(r"[\s\d]+(sd[a-z])\d+\s+([A-Z]:)", part)
             if rm:
-                cygwin_real_drives[rm.group(1)] = rm.group(2)
+                detected_devices[rm.group(1)] = rm.group(2)
+            elif args.debug:
+                print(rm.group(1), "- not mounted", file=sys.stderr)
 
-    for device in os.listdir("/dev"):
-        if not re.match("sd[a-z]$", device):
-            continue
 
-        if args.debug:
-            print("+ device:", device, file=sys.stderr)
+    elif sys.platform.startswith("win"):  # win native python. very ununixy env
+        dstr, err = run_smartctl('', '--scan')
+        if err != '':
+            print(err)
+            return
 
-        # check if it is ata one. Currently, seen variants:
-        #   onboard:    /devices/pci0000:00/0000:00:12.0/ata1/host0/target0:0:0/0:0:0:0/block/sda
-        #   addon card: /devices/pci0000:00/0000:00:14.0/0000:02:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sdc
-        #   USB drive:  /devices/pci0000:00/0000:00:15.0/usb2/2-2/2-2:1.0/host4/target4:0:0/4:0:0:0/block/sde
-        # NOTE: reading major # from /sys/class/block/sd?/dev being a tad untidy as I think,
-        #       but I have no SCSI drives to look at.
-        if sys.platform.startswith("linux"):
+        for line in dstr.splitlines():
+            # /dev/sda -d ata  # /dev/sda, ATA device
+            # /dev/sdd -d sat  # /dev/sdd [SAT], ATA device
+            # /dev/sde -d scsi  # /dev/sde, SCSI device
+            m = re.match(r'.dev.(sd.)\s+-d\s+(\S+)', line)
+            device = m.group(1)
+            type = m.group(2)
+
+            # SCSI is a new USB now
+            if type != 'ata' and type != 'sat':
+                if args.debug:
+                    print(device, " type is ", type, file=sys.stderr)
+                continue
+
+            detected_devices[device] = type
+
+    else:  # hope its linux
+        for device in os.listdir("/dev"):
+            if not re.match("sd[a-z]$", device):
+                continue
+
+            # check if it is ata one. Currently, seen variants:
+            #   onboard:    /devices/pci0000:00/0000:00:12.0/ata1/host0/target0:0:0/0:0:0:0/block/sda
+            #   addon card: /devices/pci0000:00/0000:00:14.0/0000:02:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sdc
+            #   USB drive:  /devices/pci0000:00/0000:00:15.0/usb2/2-2/2-2:1.0/host4/target4:0:0/4:0:0:0/block/sde
+            # NOTE: reading major # from /sys/class/block/sd?/dev being a tad untidy as I think,
+            #       but I have no SCSI drives to look at.
             rm = re.search(r"/devices/pci.+/ata\d+/host\d+/", os.readlink("/sys/class/block/" + device))
             if not rm:
                 if args.debug:
-                    print("- not an SCSI/ATA", file=sys.stderr)
+                    print(device, "- not an SCSI/ATA", file=sys.stderr)
                 continue
 
-        elif sys.platform.startswith("cygwin"):
-            if device not in cygwin_real_drives:
-                if args.debug:
-                    print("- not mounted", file=sys.stderr)
-                continue
+            detected_devices[device] = '-'
+
+    for device in detected_devices:
+        if args.debug:
+            print("+ device:", device, file=sys.stderr)
 
         device_topic = config["device_topic"].replace("$device", device)
 
@@ -665,7 +706,7 @@ def check_storage_sd() -> None:
                             dc["scopts"].append(f[7:])
                         else:
                             dc["model flags"].append(f)
-            except FileNotFoundError:  # cygwin has no /sys
+            except FileNotFoundError:  # win/cygwin has no /sys
                 dc["model"] = "_"
 
         # doing nagios's check_ide_smart run if configured. it is really simple.
@@ -765,7 +806,7 @@ def set_config_default(key: str, val) -> None:
 
 
 ####################################################
-global config_full, dates_json, devices_cache, root_topic, sender
+global config_full, dates_json, root_topic, sender
 
 # This is the list of known attributes where warning should be produced on val exceed threshold
 # True when val < thresh is bad, False when val > threshold is bad
