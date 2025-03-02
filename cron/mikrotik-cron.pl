@@ -1,8 +1,10 @@
 #!/bin/perl
-# This script reports to stderr Mikrotik RouterOS device's bad health and if there are updates available.
+# This script talks to Mikrotik RouterOS device via SSH and reports bad health and if there are updates available to stderr.
 # Copyright by Andrej Pakhutin (pakhutin <at> gmail)
 # http://github.com/kadavris/monitoring
 # License: see accompanying LICENSE file
+#
+# CONFIGURATION:
 # The parameters are: path to config file
 # The 1st line of config is: <router's address> "<login>" "<password>"
 use warnings;

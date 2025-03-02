@@ -116,7 +116,7 @@ def spawn_sender() -> None:
     if args.debug:
         print("+ Spawning sender process:", config['sender'], file=sys.stderr)
 
-    sender=subprocess.Popen(config['sender'], bufsize=1,
+    sender=subprocess.Popen(shlex.split(config['sender']), bufsize=1,
                               # default buf size may gobble a whole loop of data and do nothing till the next
                               stdin=subprocess.PIPE,
                               stdout=None if args.debug or config['sender'].find('--debug')
