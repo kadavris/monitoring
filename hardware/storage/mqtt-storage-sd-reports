@@ -406,7 +406,13 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
             ret[err_or_warn_section].append(msg)
             ret[err_or_warn_section + " count"] += 1
 
-            if post_data:
+            # record the age of an earliest problem, so messages will be a bit more meaningful
+            err_age_section = err_or_warn_section + " age"
+            err_age = (int(ret["power on time"]) - int(elog["lifetime_hours"])) // 24
+            if not err_age_section in ret or int(ret[err_age_section]) > err_age:
+                ret[err_age_section] = str(err_age)
+
+            if post_data:  # dedicated errors topic is set
                 post_data.append(str(elog["lifetime_hours"]) + ':"'
                                  + elog["error_description"].replace('"', r'\"') + "}")
 
@@ -477,19 +483,21 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         else:
             lifetime = ret["power on time"]
 
+        max_tests_age = int(config["max_tests_age"])
+
         if last_short_test_age == 0:
             short_tests_status = " and SHORT tests was NEVER run"
         else:
             if lifetime < last_short_test_age:  # happen if test's timestamps are wrapped
                 # I know it's inaccurate and "broken clock show correct time twice a day",
                 # but the best solution IMHO is to cache old results to see if there were any changes
-                last_short_test_days = int(abs(lifetime - (65536 - last_short_test_age)) / 24)
+                last_short_test = int(abs(lifetime - (65536 - last_short_test_age)))
             else:
-                last_short_test_days = int((lifetime - last_short_test_age) / 24)
+                last_short_test = int((lifetime - last_short_test_age))
 
-            if last_short_test_days > int(config["max_tests_age"]):
-                short_tests_status = " and SHORT tests also didn't run for " + \
-                                     str(last_short_test_days) + " days"
+            if last_short_test > max_tests_age:
+                short_tests_status = " and SHORT tests also didn't run for " + str(int(last_short_test / 24)) \
+                                     + " days"
 
         if last_long_test_age == 0:
             if ret["tests inconclusive"] > 0:
@@ -497,14 +505,14 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
             else:
                 ret["testing status"] = "LONG tests was NEVER run" + short_tests_status
         else:
-            if lifetime < last_short_test_age:  # happen if test's timestamps are wrapped
-                last_long_test_days = int(abs(lifetime - (65536 - last_long_test_age)) / 24)
+            if lifetime < last_long_test_age:  # happen if test's timestamps are wrapped
+                last_long_test = int(abs(lifetime - (65536 - last_long_test_age)))
             else:
-                last_long_test_days = int((lifetime - last_long_test_age) / 24)
+                last_long_test = int((lifetime - last_long_test_age))
 
-            if last_long_test_days > int(config["max_tests_age"]):
-                ret["testing status"] = "LONG tests didn't run for " + str(last_long_test_days) \
-                                        + " days" + short_tests_status
+            if last_long_test > max_tests_age:
+                ret["testing status"] = "LONG tests didn't run for " + str(last_long_test//24) \
+                                        + " days (max: " + str(max_tests_age//24) + ")" + short_tests_status
 
         if ret["testing status"] == "":
             ret["testing status"] = "OK"
@@ -744,12 +752,14 @@ def check_storage_sd() -> None:
             msg = json.dumps(sctl_data, skipkeys=True, separators=(',\n', ': '))
 
             if sctl_data["errors count"] > 0:
-                state.append("Has " + str(sctl_data["errors count"]) + " current errors!")
+                state.append("Has " + str(sctl_data["errors count"]) + " current errors! Last occured "\
+                             + str(sctl_data["errors age"]) + " day(s) ago")
                 severity += sctl_data["errors count"] + 1
 
             if sctl_data["warnings count"] > 0:
-                state.append("Has " + str(sctl_data["warnings count"]) + " current warnings.")
-                severity += sctl_data["warnings count"] / 2
+                state.append("Has " + str(sctl_data["warnings count"]) + " warnings. Last occured "\
+                             + str(sctl_data["warnings age"]) + " day(s) ago")
+                severity += sctl_data["warnings count"] / 10  # warnings are more or less old and stabilized state
 
             if sctl_data["tests failed"] > 0:
                 state.append(str(sctl_data["tests failed"]) + " of " + str(sctl_data["tests done"])
