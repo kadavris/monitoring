@@ -437,13 +437,18 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         else:
             post_data = None
 
-        last_short_test_age = 0
-        last_long_test_age = 0
+        last_short_test_age = sys.maxsize
+        last_long_test_age = sys.maxsize
 
         # to properly report unfinished tests we'll count only the latest (topmost)
         # Mark as True because it is reset on 1st passed,
         # and still we need to report first in list if it failed
         last_inconclusive = True
+
+        if "short_test_log_time" in model_flags:  # if test log time is stored as uint16
+            lifetime = ret["power on time"] % 65535
+        else:
+            lifetime = ret["power on time"]
 
         for tlog in sctl_json["ata_smart_self_test_log"]["standard"]["table"]:
             ret["tests done"] += 1
@@ -460,12 +465,18 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
 
             test_date = tlog["lifetime_hours"]
 
+            # calculating time difference
+            if lifetime < test_date: # happens on short int wrap
+                tdiff = lifetime - (65535 - test_date)
+            else:
+                tdiff = lifetime - test_date
+
             if tlog["type"]["value"] == 1:  # Short offline
-                if last_short_test_age < test_date:
-                    last_short_test_age = test_date
+                if tdiff < last_short_test_age:
+                    last_short_test_age = tdiff
             elif tlog["type"]["value"] == 2:  # Extended offline
-                if last_long_test_age < test_date:
-                    last_long_test_age = test_date
+                if tdiff < last_long_test_age:
+                    last_long_test_age = tdiff
 
             if not tlog["status"]["passed"]:
                 ret["testing status"] += tlog["status"]["string"] + " @ " + str(test_date) + "\n"
@@ -478,41 +489,25 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         # we'll report short tests problems if there are problems with long test too
         short_tests_status = ""
 
-        if "short_test_log_time" in model_flags:  # if test log time is stored as uint16
-            lifetime = ret["power on time"] % 65536
-        else:
-            lifetime = ret["power on time"]
-
         max_tests_age = int(config["max_tests_age"])
 
-        if last_short_test_age == 0:
+        if last_short_test_age == sys.maxsize:
             short_tests_status = " and SHORT tests was NEVER run"
         else:
-            if lifetime < last_short_test_age:  # happen if test's timestamps are wrapped
-                # I know it's inaccurate and "broken clock show correct time twice a day",
-                # but the best solution IMHO is to cache old results to see if there were any changes
-                last_short_test = int(abs(lifetime - (65536 - last_short_test_age)))
-            else:
-                last_short_test = int((lifetime - last_short_test_age))
+            if last_short_test_age > max_tests_age:
+                short_tests_status = " and SHORT tests also didn't run for " \
+                                     + str(last_short_test_age // 24) + " days"
 
-            if last_short_test > max_tests_age:
-                short_tests_status = " and SHORT tests also didn't run for " + str(int(last_short_test / 24)) \
-                                     + " days"
-
-        if last_long_test_age == 0:
+        if last_long_test_age == sys.maxsize:
             if ret["tests inconclusive"] > 0:
                 ret["testing status"] = "ALL LONG tests were unfinished" + short_tests_status
             else:
                 ret["testing status"] = "LONG tests was NEVER run" + short_tests_status
         else:
-            if lifetime < last_long_test_age:  # happen if test's timestamps are wrapped
-                last_long_test = int(abs(lifetime - (65536 - last_long_test_age)))
-            else:
-                last_long_test = int((lifetime - last_long_test_age))
-
-            if last_long_test > max_tests_age:
-                ret["testing status"] = "LONG tests didn't run for " + str(last_long_test//24) \
-                                        + " days (max: " + str(max_tests_age//24) + ")" + short_tests_status
+            if last_long_test_age > max_tests_age:
+                ret["testing status"] = "LONG tests didn't run for " \
+                                        + str(last_long_test_age // 24) \
+                                        + " days (max: " + str(max_tests_age // 24) + ")" + short_tests_status
 
         if ret["testing status"] == "":
             ret["testing status"] = "OK"
@@ -757,7 +752,7 @@ def check_storage_sd() -> None:
                 severity += sctl_data["errors count"] + 1
 
             if sctl_data["warnings count"] > 0:
-                state.append("Has " + str(sctl_data["warnings count"]) + " warnings. Last occured "\
+                state.append("Has " + str(sctl_data["warnings count"]) + " issues. Last occured "\
                              + str(sctl_data["warnings age"]) + " day(s) ago")
                 severity += sctl_data["warnings count"] / 10  # warnings are more or less old and stabilized state
 
@@ -835,7 +830,7 @@ config_path = "/etc/smarthome/reporters/reporters.ini"  # default
 
 parser = argparse.ArgumentParser(
     description="Collect state info from the storage and post it to mqtt.\n"
-                "V2.010. Copyright (c) 2022+ by Andrej Pakhutin")
+                "V2.011. Copyright (c) 2022+ by Andrej Pakhutin")
 parser.add_argument("-c", "--config", dest="config_path", action="store", default=config_path,
                     help="path to a non-default (" + config_path + ") config file")
 parser.add_argument("-d", "--debug", dest="debug", action="store_true", default=False, help="debug mode")
