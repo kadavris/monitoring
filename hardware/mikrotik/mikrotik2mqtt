@@ -532,21 +532,31 @@ def get_traffic() -> bool:
 
                 # adding deltas
                 if var in want_deltas:
-                    delta_name = var + '-delta'
+                    is_speed = False
+                    if var.endswith('-byte') or var.endswith('-packet'):
+                        is_speed = True
+                        delta_name = var + '-speed'
+                    else:
+                        delta_name = var + '-delta'
+
                     delta_val = 0
-                    tstats_key = interface + delta_name
+                    tstats_key = interface + var
 
                     if tstats_key in traffic_stats:  # computing diff
-                        delta_val = int(val) - traffic_stats[tstats_key]
+                        delta_val = float(val) - traffic_stats[tstats_key]
                         if delta_val < 0:  # stats reset on router?. just in case
                             delta_val = 0
 
-                    traffic_stats[delta_name] = delta_val
+                    # Let some deltas be in the form of speed (N/second)
+                    if is_speed:
+                        delta_val = round(float(delta_val) / float(CONFIG['report_interval']), 3)
+
+                    traffic_stats[interface+delta_name] = delta_val
 
                     traffic_stats[tstats_key] = int(val)
                     out += '"' + delta_name + '":' + str(delta_val) + ','
 
-            elif val[0] != '"':
+            elif val[0] != '"':  # value is not a number
                 val = '"' + val + '"'
 
             out += '"' + var + '":' + val + ','

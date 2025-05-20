@@ -142,21 +142,29 @@ for my $host ( keys( %$m2mq_config ) )
             if ( $traffic_ent =~ /-byte\b/ )
             {
                 my $unit = make_scaled_sensor_attr($main_sensor, $traffic_ent, 'B', 'traffic_scale_byte', $yaml_mqtt_h);
-                print $yaml_mqtt_h "  device_class: data_size\n  unit_of_measurement: \"$unit\"\n";
-                if ( $traffic_ent =~ /-delta\b/ )
+                print $yaml_mqtt_h "  unit_of_measurement: \"$unit\"\n";
+                if ( $traffic_ent =~ /-speed\b/ )
                 {
-                    print $yaml_mqtt_h "  state_class: measurement\n";
+                    print $yaml_mqtt_h "  device_class: data_rate\n  state_class: measurement\n";
                 }
                 else
                 {
-                    print $yaml_mqtt_h "  state_class: total_increasing\n";
+                    print $yaml_mqtt_h "  device_class: data_size\n  state_class: total_increasing\n";
                 }
             }
             elsif ( $traffic_ent =~ /-packet\b/ )
             {
                 print $yaml_mqtt_h qq~  value_template: "{{ state_attr( 'sensor.$main_sensor', '$traffic_ent' ) }}"\n~;
-                print $yaml_mqtt_h "  unit_of_measurement: \"Packets\"\n";
-                print $yaml_mqtt_h "  state_class: measurement\n";
+                if ( $traffic_ent =~ /-speed\b/ )
+                {
+                    print $yaml_mqtt_h "  device_class: data_rate\n  state_class: measurement\n";
+                    print $yaml_mqtt_h "  unit_of_measurement: \"Packets/s\"\n";
+                }
+                else
+                {
+                    print $yaml_mqtt_h "  device_class: data_size\n  state_class: total_increasing\n";
+                    print $yaml_mqtt_h "  unit_of_measurement: \"Packets\"\n";
+                }
                 print $yaml_mqtt_h "  icon: \"mdi:train-car-container\"\n";
             }
             elsif ( $traffic_ent =~ /(-error\b|-drop\b|link-downs\b)/ ) # errors total/deltas
@@ -283,19 +291,35 @@ for my $host ( keys( %$m2mq_config ) )
 print "\n";
 
 ##################################################
+# in: $main_sensor: sensor's ID/name
+#     $attr: sensor's attribute name
+#     $unit: unit to scale to (from bytes). used if $cfgkey not exists
+#     $cfgkey: .ini key with default scaling factor
+#     $file: output file handle
+# out: screen unit
+
 sub make_scaled_sensor_attr
 {
     my ($main_sensor, $attr, $unit, $cfgkey, $file) = @_;
 
-    my %factors = ( 'KB'=>1024, 'MB'=>1024*1024, 'GB'=>1024*1024*1024, 'TB'=>1024*1024*1024*1024 );
+    my %factors = ( 'B'=>1, 'KB'=>1024, 'MB'=>1024*1024, 'GB'=>1024*1024*1024, 'TB'=>1024*1024*1024*1024 );
 
-    print $file qq~  value_template: "{{ float(state_attr( 'sensor.$main_sensor', '$attr' )~;
+    print $file qq~  value_template: "{{ (float(state_attr( 'sensor.$main_sensor', '$attr' ))~;
     if ( defined($config->{_}->{$cfgkey} ) )
     {
-        $unit = uc($config->{_}->{$cfgkey});
-        print $file ' / ', $factors{ $unit };
+        $unit = $config->{_}->{$cfgkey};
     }
-    print $file qq~,3) }}"\n~;
+    $unit = uc($unit);
+    if ( $factors{ $unit } > 1 )
+    {
+        print $file '/', $factors{ $unit }, '.0';
+    }
+    print $file qq~)|round(3) }}"\n~;
+
+    if ( $attr =~ /-speed\b/ )
+    {
+        $unit .='/s';
+    }
     return $unit;
 }
 
