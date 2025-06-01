@@ -1,0 +1,62 @@
+[DEFAULT]
+# Where is the .ini of mikrotik2mqtt
+service_ini=/etc/smarthome/reporters/mikrotik2mqtt.ini
+
+# These are the defaults:
+#yaml_mqtt_dir = inc/mqtt/sensor/
+#yaml_sensors_dir = inc/sensor/
+
+# Looks like its in Celsius degrees.
+# IDK if router can be configured to output F.
+# However we can program conversion template if asked nicely. ;)
+overheat=59
+
+# Depends on you PSU output/quality:
+voltage_low=10
+voltage_high=55
+
+# Make those entities about the traffic:
+# NOTE:
+# entities with -byte and -packet at the end will be received in two forms:
+# 1) Original name with the current value
+# 2) Additional entity suffixed with -speed, representing bytes/packets per second
+# others will come in these forms:
+# 1) Original name with the current value
+# 2) Entity with the difference between current and last service's runs and suffixed as -delta
+traffic_entities=rx-error tx-error rx-byte-speed tx-byte-speed rx-error-delta tx-error-delta rx-drop-delta tx-drop-delta
+
+# Others that you may include:
+#last-link-up-time
+#link-downs
+#rx-drop
+#tx-drop
+#rx-packet
+#tx-packet
+#tx-queue-drop
+#fp-rx-byte
+#fp-tx-byte
+#fp-rx-packet
+#fp-tx-packet
+#link-downs-delta
+#rx-packet-speed
+#tx-packet-speed
+#tx-queue-drop-delta
+#fp-rx-byte-speed
+#fp-tx-byte-speed
+#fp-rx-packet-speed
+#fp-tx-packet-speed
+
+#traffic_scale_byte=KB  # Can be: [KB, MB, GB, TB] - scale byte values to larger units.
+#traffic_scale_quantities=KB  # Can be [KB, MB, GB, TB] - scale other quantity stuff up
+
+# Note about the firewall stats:
+# 1) Now you see, these are derived directly from router's firewall, so we cannot retrieve it automagically.
+#    NOTE:Today I'm lost about what exactly I meant by this, but you need to consult the service configuration at least
+# 2) stat names are generated with automatically added suffixes:
+#    -packets and -bytes. So here you need to enter only the prefix/common part of these
+firewall_by_id=inet-invalid inet-non-public inet-synflood tarpit inet-drop-blacklisted inet-tcp-lowport inet-udp-lowport inet-unknown
+
+# What icons to use when some errors/drop/etc counter going zero to something
+# Listed here are defaults
+#counters_icon_good=mdi:lan-connect
+#counters_icon_bad=mdi:lan-disconnect
