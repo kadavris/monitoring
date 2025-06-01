@@ -38,31 +38,30 @@ def handle_termination(signum, frame) -> None:
 
 
 #############################################################
-def load_config(conf_file: str) -> {}:
+def load_config(in_name: str) -> {}:
     """
     Will load configuration file, checking for problems beforehand
-    :param conf_file: path to config file
+    :param in_name: path to config file
     :return: None
     """
     global ARGS, CONFIG, GLOBAL_CONFIG
 
-    file = conf_file
+    conf_file_names = [in_name]
 
-    if not os.path.exists(file):
-        if re.search(r'/', file):
-            print("! Can't open config: ", file, file=sys.stderr)
-            sys.exit(1)
-
-        file = os.path.dirname(sys.argv[0]) + '/' + conf_file
-
-        if not os.path.exists(file):
-            file = '/etc/smarthome/reporters/' + conf_file
+    if not os.path.isabs(in_name):  # adding fallback variants just in case
+        conf_file_names.append(os.path.join(os.path.dirname(sys.argv[0]), in_name))
+        conf_file_names.append('/etc/smarthome/reporters/' + in_name)
 
     if ARGS.debug:
-        print("+ Loading config:", file)
+        print("+ Loading config:", in_name)
 
     GLOBAL_CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
-    GLOBAL_CONFIG.read(file)
+    GLOBAL_CONFIG.read(conf_file_names)
+
+    if GLOBAL_CONFIG is {}:
+        print("ERROR: Can't read config from: ", ', '.join(conf_file_names), file=sys.stderr)
+        sys.exit(1)
+
     return GLOBAL_CONFIG
 
 
