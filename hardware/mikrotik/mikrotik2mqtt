@@ -482,6 +482,39 @@ def get_upgrades() -> bool:
 
     return True
 
+####################################################
+def set_tstats(entity: str, val: int, is_speed: bool, store_prefix: str = '') -> str:
+    """
+    Helper to deal with traffic stats deltas
+
+    :param entity: The key to traffic_stats
+    :param val: New value to store
+    :param is_speed: True if this measurement is about the speed, not a count of smth
+    :return: json fragment for posting to MQTT
+    """
+    global CONFIG
+
+    delta_val = 0
+
+    tstats_key = store_prefix + entity
+    if tstats_key in traffic_stats:  # computing diff
+        delta_val = float(val) - traffic_stats[tstats_key]
+        if delta_val < 0.0:  # stats reset on router?. just in case
+            delta_val = 0.0
+
+    # Let some deltas be in the form of speed (N/second)
+    if is_speed:
+        delta_val = round(float(delta_val) / float(CONFIG['report_interval']), 3)
+
+    traffic_stats[tstats_key] = int(val)
+    traffic_stats[tstats_key + '-delta'] = int(val)
+
+    if is_speed:
+        delta_suff = '-speed'
+    else:
+        delta_suff = '-delta'
+
+    return '"' +  entity + delta_suff + '":' + str(delta_val) + ','
 
 ####################################################
 def get_traffic() -> bool:
@@ -531,29 +564,7 @@ def get_traffic() -> bool:
 
                 # adding deltas
                 if var in want_deltas:
-                    is_speed = False
-                    if var.endswith('-byte') or var.endswith('-packet'):
-                        is_speed = True
-                        delta_name = var + '-speed'
-                    else:
-                        delta_name = var + '-delta'
-
-                    delta_val = 0
-                    tstats_key = interface + var
-
-                    if tstats_key in traffic_stats:  # computing diff
-                        delta_val = float(val) - traffic_stats[tstats_key]
-                        if delta_val < 0:  # stats reset on router?. just in case
-                            delta_val = 0
-
-                    # Let some deltas be in the form of speed (N/second)
-                    if is_speed:
-                        delta_val = round(float(delta_val) / float(CONFIG['report_interval']), 3)
-
-                    traffic_stats[interface+delta_name] = delta_val
-
-                    traffic_stats[tstats_key] = int(val)
-                    out += '"' + delta_name + '":' + str(delta_val) + ','
+                    out += set_tstats(var, int(val), var.endswith('-byte') or var.endswith('-packet'), interface)
 
             elif val[0] != '"':  # value is not a number
                 val = '"' + val + '"'
@@ -565,7 +576,8 @@ def get_traffic() -> bool:
 
         # determining the /state topic value
         problems = ''
-        for problems_key in ['link-downs-delta', 'tx-queue-drop-delta', 'rx-drop-delta', 'tx-drop-delta']:
+        for problems_topic in ['link-downs-delta', 'tx-queue-drop-delta', 'rx-drop-delta', 'tx-drop-delta']:
+            problems_key = interface + problems_topic
             if not problems_key in traffic_stats:
                 problems = problems + ' WARN: No data for ' + problems_key
             elif traffic_stats[problems_key] > 0:
@@ -641,7 +653,10 @@ def firewall_by_id() -> str:
     result = firewall_where('comment~"STATID:"', [])
     ret = ''
     for i in result:
-        ret += '"' + i[0] + '-bytes":' + str(i[1]) + ', "' + i[0] + '-packets":' + str(i[2]) + ','
+        name = i[0] + '-bytes'
+        ret += ' "' + name + '":' + str(i[1]) + ', ' + set_tstats(name, int(i[1]), False)
+        name = i[0] + '-packets'
+        ret += ' "' + name + '":' + str(i[2]) + ', ' + set_tstats(name, int(i[2]), False)
 
     return ret.rstrip(',')
 

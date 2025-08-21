@@ -267,26 +267,22 @@ for host in m2mq_config.sections():
                 main_sensor_fw = re.sub(r'\W+', '_', f"{host_lower}_firewall_stats_by_id").lower()
                 firewall_by_id_fields = script_config['DEFAULT'].get('firewall_by_id', '').split()
                 for field in firewall_by_id_fields:
-                    # Bytes entity
-                    entity_bytes = f"{field}-bytes"
-                    yaml_mqtt_h.write(f'\n- name: "{host_lower}: firewall: {entity_bytes}"\n')
-                    yaml_mqtt_h.write(f'  state_topic: "{fw_state_topic}"\n')
-                    yaml_mqtt_h.write(f'  json_attributes_topic: "{fw_topic_base}"\n')
+                    for unit in ('bytes', 'packets'):
+                        for delta in ('', '-delta'):
+                            entity = field + '-' + unit + delta
+                            yaml_mqtt_h.write(f'\n- name: "{host_lower}: firewall: {entity}"\n')
+                            yaml_mqtt_h.write(f'  state_topic: "{fw_state_topic}"\n')
+                            yaml_mqtt_h.write(f'  json_attributes_topic: "{fw_topic_base}"\n')
 
-                    unit_bytes = make_scaled_sensor_attr(script_config, yaml_mqtt_h, main_sensor_fw, entity_bytes, 'B', 'traffic_scale_byte')
-                    yaml_mqtt_h.write(f'  device_class: data_size\n  unit_of_measurement: "{unit_bytes}"\n')
-                    yaml_mqtt_h.write("  state_class: measurement\n")
+                            if unit == 'bytes':
+                                unit_bytes = make_scaled_sensor_attr(script_config, yaml_mqtt_h, main_sensor_fw, entity, 'B', 'traffic_scale_byte')
+                                yaml_mqtt_h.write(f'  device_class: data_size\n  unit_of_measurement: "{unit_bytes}"\n')
+                            else:
+                                yaml_mqtt_h.write(f'  value_template: "{{{{ state_attr( \'sensor.{main_sensor_fw}\', \'{entity}\' ) }}}}"\n')
+                                yaml_mqtt_h.write(f'  unit_of_measurement: "Packets"\n')
+                                yaml_mqtt_h.write('  icon: "mdi:train-car-container"\n')
 
-                    # Packets entity
-                    entity_packets = f"{field}-packets"
-                    yaml_mqtt_h.write(f'\n- name: "{host_lower}: firewall: {entity_packets}"\n')
-                    yaml_mqtt_h.write(f'  state_topic: "{fw_state_topic}"\n')
-                    yaml_mqtt_h.write(f'  json_attributes_topic: "{fw_topic_base}"\n')
-
-                    yaml_mqtt_h.write(f'  value_template: "{{{{ state_attr( \'sensor.{main_sensor_fw}\', \'{entity_packets}\' ) }}}}"\n')
-                    yaml_mqtt_h.write('  unit_of_measurement: "Packets"\n')
-                    yaml_mqtt_h.write('  state_class: measurement\n')
-                    yaml_mqtt_h.write('  icon: "mdi:train-car-container"\n')
+                            yaml_mqtt_h.write("  state_class: measurement\n")
 
                 yaml_mqtt_h.write(f"{separator}")
 
