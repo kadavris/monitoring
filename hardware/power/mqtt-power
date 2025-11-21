@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
  This script produces reports on electrical power and push it into mqtt.
- repo is in github.com/kadavris
+ repo is in github.com/kadavris.
  assumed topic structure:
      power
          <dev_id> - {"model":"...", "errors":"...", "attribute1":"..."...}
@@ -24,9 +24,9 @@ import time
 #############################################################
 def handle_termination(signum, frame) -> None:
     """
-    Will (safely) handle termination. Stopping sender agend on its rails.
-    :param signum: unused
-    :param frame: unused
+    Will (safely) handle termination. Stopping sender agent on its rails.
+    :param signum: NOT USED
+    :param frame: NOT USED
     :return: None
     """
     if ARGS.debug:
@@ -39,7 +39,7 @@ def handle_termination(signum, frame) -> None:
 
 
 #############################################################
-def load_config(c_file: str) -> {}:
+def load_config(c_file: str):
     """
     Will load configuration file, checking for problems beforehand
     :param c_file: path to config file
@@ -117,7 +117,7 @@ def send_message(*msg) -> None:
                 print('> Send: ', msg)
 
             Sender.stdin.write(''.join(msg))
-        except:
+        except Exception:
             if ARGS.debug:
                 exc_type, exc_val, traceback = sys.exc_info()
                 if exc_val:
@@ -138,15 +138,15 @@ def send_message(*msg) -> None:
 
 
 ########################################
-def update_stats(device: str, prefix: str, time_value: float, voltage: float, freq: float) -> None:
+def update_stats(device: str, prefix: str, time_value: int, voltage: float, freq: float) -> None:
     """
-    Will update stats[ device ] with minute, hourly or daily values depending on prefix.
-    Currently, it sums values for simple mean calculation
+    Will update stats[ device ] with per-minute, hourly or daily values depending on a prefix value.
+    All keys in form prefix + 'string' must be in sync with outer function for values to be reported successfully
     :param device: str: device path
-    :param prefix: str: 'm'/'h'/'d'
-    :param time_value: float: timestamp
-    :param voltage: float
-    :param freq: float: frequency
+    :param prefix: str: 'm'/'h'/'d' - time fraction unit
+    :param time_value: int: time part value that we're accounting for
+    :param voltage: float: as reported by device
+    :param freq: float: frequency as reportde by device
     :return: None
     """
     global Stats
@@ -158,21 +158,31 @@ def update_stats(device: str, prefix: str, time_value: float, voltage: float, fr
         Stats[device][prefix + 'samples'] = 2
         Stats[device][prefix + 'start'] = time_value
     else:
-        Stats[device][prefix + 'samples'] += 1
-        Stats[device][prefix + 'v'] += voltage
-        Stats[device][prefix + 'f'] += freq
+        if voltage > 0.0:  # don't account for blackouts from russian cultural bombings.
+            Stats[device][prefix + 'samples'] += 1
+            Stats[device][prefix + 'v'] += voltage
+            Stats[device][prefix + 'f'] += freq
 
-        Stats[device][prefix + '_v_mean'] = \
-            Stats[device][prefix + 'v'] // Stats[device][prefix + 'samples']
-        Stats[device][prefix + '_f_mean'] = \
-            Stats[device][prefix + 'f'] // Stats[device][prefix + 'samples']
+    if voltage > 0.0:
+        Stats[device]['in_bo'] = False
+    else:
+        if prefix == 'd':  # update blackouts once per m/h/d calls series
+            Stats[device]['bo_time'] += int(CONFIG['sample_interval'])
+            if not Stats[device]['in_bo']:
+                Stats[device]['blackouts'] += 1
+                Stats[device]['in_bo'] = True
+
+    Stats[device][prefix + '_v_mean'] = \
+        Stats[device][prefix + 'v'] // Stats[device][prefix + 'samples']
+    Stats[device][prefix + '_f_mean'] = \
+        Stats[device][prefix + 'f'] // Stats[device][prefix + 'samples']
 
 
 ########################################
 def get_model_specific_config(device: str, keyword: str, default: str = "") -> str:
     """
     Return the value of model-specific setting from config.
-    :param device: str. NUT ID of UPS device
+    :param device: str. NUT's ID of UPS device
     :param keyword: str. Attribute/keyword name
     :param default: str. Default value to return if not found
     :return: str. The value
@@ -199,7 +209,9 @@ def get_upsc_output(device: str) -> dict:
     """
     global ARGS, CONFIG, Stats
 
-    to_return = {"model": "", "errors": ''}
+    to_return = {"model": "", "errors": "",
+                 "data": {},  # attributes values will be here
+    }
 
     # initializing the list of minimal attributes that we needed (note '.' replaced by '_')
     upsc_data_needed = [
@@ -220,7 +232,6 @@ def get_upsc_output(device: str) -> dict:
         upsc_data_needed += to_return['bulk_report']
 
     to_return['need'] = upsc_data_needed  # indicating what we intended to collect here
-    to_return['data'] = {}  # attributes values will be here
 
     upsc_bin = ['upsc', device]
     if 'upsc_binary' in CONFIG:
@@ -263,13 +274,14 @@ def get_upsc_output(device: str) -> dict:
 
         v = float(to_return['data']['input_voltage'])
         f = float(to_return['data']['input_frequency']) \
-            if 'input_frequency' in to_return['data'] else 0
-        if f == 0:
+            if 'input_frequency' in to_return['data'] else 0.0
+        if f == 0.0:
             f = float(to_return['data']['output_frequency']) \
-                if 'output_frequency' in to_return['data'] else 0
+                if 'output_frequency' in to_return['data'] else 0.0
 
         if device not in Stats:  # init
             Stats[device] = {
+                'blackouts': 0, 'bo_time': 0, 'in_bo': False,
                 'mstart': 0, 'm_v_mean': v, 'mv': v,  # minute
                 'mf': f, 'm_f_mean': f, 'msamples': 1,
                 'hstart': 0, 'h_v_mean': v, 'hv': v,  # hour
@@ -290,7 +302,10 @@ def get_upsc_output(device: str) -> dict:
 
         to_return['data']['voltage_mean_day'] = Stats[device]['d_v_mean']
         to_return['data']['frequency_mean_day'] = Stats[device]['d_f_mean']
-    except:
+
+        to_return['data']['blackouts'] = Stats[device]['blackouts']
+        to_return['data']['time_in_blackouts'] = Stats[device]['bo_time']
+    except Exception:
         pass
 
     # fill in specials:
@@ -357,7 +372,7 @@ def check_nut() -> None:
                 time_str = time.strftime(r'%Y-%m-%d %H:%M:%S')
 
                 line = ''
-                if len(Log_items) > 0:  # subset of data requested
+                if len(Log_items) > 0:  # a subset of data requested
                     for k in Log_items:
                         if k and k not in upsc_data['data']:
                             line += time_str + ' WARNING! upsc does not provide item "' + k + '"\n'
@@ -376,7 +391,7 @@ def check_nut() -> None:
 
                 open(log_name, mode='a').writelines(line)
 
-            except:
+            except Exception:
                 del CONFIG['log_samples']
                 print('! Error writing log file: ', log_name, ':',
                       sys.exc_info()[0], file=sys.stderr)
@@ -441,7 +456,9 @@ global Sender, GLOBAL_CONFIG
 config_path = '/etc/smarthome/reporters/reporters.ini'  # default
 
 parser = argparse.ArgumentParser(
-    description='Collecting electrical power info and passing it to mqtt agent')
+    description='Collecting electrical power info and passing it to mqtt agent. V2.5.1119.'
+                ' Created by Andrej Pakhutin - pakhutin at gmail.'
+    )
 parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
                     help='path to non-default (' + config_path + ') config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
@@ -517,7 +534,7 @@ try:
     Sender.communicate(input='\n\n{ "cmd":"exit" }\n')
 
     Sender.wait(timeout=15.0)
-except:
+except Exception:
     pass
 
 Sender.terminate()

@@ -94,6 +94,18 @@
   unit_of_measurement: 'Hz'
   value_template: "{{ value_json.frequency_mean_hour }}"
 
+- name: "Main UPS: Blackouts detected"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  value_template: "{{ value_json.blackouts }}"
+
+- name: "Main UPS: Time in blackouts"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  device_class: duration
+  unit_of_measurement: 's'
+  value_template: "{{ value_json.time_in_blackouts }}"
+
 # UPS: data freshness check
 - name: "Main UPS: last update"
   state_topic: "hw/power/main/updated"
