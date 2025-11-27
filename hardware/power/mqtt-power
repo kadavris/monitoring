@@ -157,7 +157,12 @@ def update_stats(device: str, prefix: str, time_value: int, voltage: float, freq
         Stats[device][prefix + 'f'] = Stats[device][prefix + '_f_mean'] + freq
         Stats[device][prefix + 'samples'] = 2
         Stats[device][prefix + 'start'] = time_value
-    else:
+
+        if prefix == 'd':  # reset blackouts info. Later we may switch to 'last 24 hours'
+            Stats[device]['bo_time'] = 0
+            Stats[device]['blackouts'] = 0
+            Stats[device]['in_bo'] = False
+    else:  # same period
         if voltage > 0.0:  # don't account for blackouts from russian cultural bombings.
             Stats[device][prefix + 'samples'] += 1
             Stats[device][prefix + 'v'] += voltage
@@ -493,9 +498,9 @@ queue = []
 Stats = {}
 
 # pre-caching the list of items to put in the log
-Log_items = []
+Log_items: list[str] = []
 if 'log_items' in CONFIG:
-    Log_items = CONFIG.get('log_items').split()
+    Log_items.extend(CONFIG.get('log_items').split())
 
 ##################################
 # set necessary defaults
