@@ -1,0 +1,170 @@
+# NOTE: This file is included from the main configuration.yaml by the statement:
+# mqtt:
+#   sensor: !include_dir_merge_list inc/mqtt/sensor
+
+#------------------------------------------------
+# UPS:
+#------------------------------------------------
+
+#in json:
+#battery_energysave
+#input_frequency
+#output_voltage
+#output_frequency
+#output_current
+#output_current_nominal
+#ups_power_nominal
+#ups_power
+
+- name: "Main UPS: state"
+  state_topic: "hw/power/main/state"
+  json_attributes_topic: "hw/power/main"
+  device:
+    manufacturer: "{{ value_json.device_mfr }}"
+    model: "{{ value_json.device_model }}"
+    name: "Main UPS"
+    identifiers: "Powerwalker VFI 2000CRM"
+
+- name: "Main UPS: Alarms"
+  state_topic: "hw/power/main/ups_alarm"
+
+- name: "Main UPS: battery charge (from device)"
+  state_topic: "hw/power/main/batt_charge"
+  unit_of_measurement: '%'
+  device_class: battery
+
+- name: "Main UPS: battery time left (by device)"
+  state_topic: "hw/power/main/batt_runtime"
+  unit_of_measurement: 'h'
+  device_class: duration
+  value_template: >-
+    {% set batt_freshness = 1.0 %}
+    {{ (float(value) / 3600.0 * batt_freshness)|round(1) }}
+
+- name: "Main UPS: battery voltage"
+  state_topic: "hw/power/main/batt_voltage"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: '{{ float(value)|round(1) }}'
+
+- name: "Main UPS: load"
+  unique_id: "main_ups_load"
+  state_topic: "hw/power/main/out_load"
+  unit_of_measurement: 'W'
+  device_class: power
+  # it seems the powerwalker doesn't detect load below 150 watt approximately
+  # also the ups report this as a percentage, hereby converting the value based on 2kW nominal
+  value_template: >-
+    {% if value == 'unknown' or int(value) == 0 %}
+      150
+    {% else %}
+      {{ int(value) * 20 }}
+    {% endif %}
+
+- name: "Main UPS: temperature"
+  state_topic: "hw/power/main/ups_temperature"
+  unit_of_measurement: '°C'
+  device_class: temperature
+
+- name: "Main UPS: input voltage"
+  state_topic: "hw/power/main/in_volts"
+  unit_of_measurement: 'V'
+  device_class: voltage
+
+- name: "Main UPS: IN voltage mean/minute"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: "{{ value_json.voltage_mean_minute }}"
+
+- name: "Main UPS: IN voltage mean/hour"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: "{{ value_json.voltage_mean_hour }}"
+
+- name: "Main UPS: IN voltage mean/day"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: "{{ value_json.voltage_mean_day }}"
+
+- name: "Main UPS: IN freq mean/hour"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'Hz'
+  value_template: "{{ value_json.frequency_mean_hour }}"
+
+- name: "Main UPS: Blackouts detected"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  value_template: "{{ value_json.blackouts }}"
+
+- name: "Main UPS: Time in blackouts"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  device_class: duration
+  unit_of_measurement: 'h'
+  value_template: "{{ (float(value_json.time_in_blackouts) / 3600.0) | round(1) }}"
+
+# UPS: data freshness check. Look at the counterpart yaml with non-nqtt sensors definitions in inc/sensors
+- name: "Main UPS: last update"
+  state_topic: "hw/power/main/updated"
+  json_attributes_topic: "hw/power/main/updated"
+  value_template: "{{ value_json.timestamp }}"
+
+- name: "Main UPS: battery charge (computed from voltage)"
+  unique_id: "main_ups_battery_charge_computed_from_voltage"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: '%'
+  device_class: battery
+  #-- upsc supplied batt_charge is way out of a real situation, so we try to compute it based on voltage
+  #-- looks like the new battery should be calibrated with 30% load max to zero to max
+  #-- We use data for the AGM 48v pack (4x12v)
+  value_template: >-
+    {% set v = states('sensor.main_ups_battery_voltage') | float(0) %}
+    {% if v >= 51.40 %} 100
+    {% elif v >= 51.20 %} {{ (99 + (v - 51.20) / (51.40 - 51.20) * (100 - 99)) | round(1) }}
+    {% elif v >= 51.00 %} {{ (90 + (v - 51.00) / (51.20 - 51.00) * (99 - 90)) | round(1) }}
+    {% elif v >= 50.00 %} {{ (80 + (v - 50.00) / (51.00 - 50.00) * (90 - 80)) | round(1) }}
+    {% elif v >= 49.20 %} {{ (70 + (v - 49.20) / (50.00 - 49.20) * (80 - 70)) | round(1) }}
+    {% elif v >= 48.60 %} {{ (60 + (v - 48.60) / (49.20 - 48.60) * (70 - 60)) | round(1) }}
+    {% elif v >= 48.20 %} {{ (50 + (v - 48.20) / (48.60 - 48.20) * (60 - 50)) | round(1) }}
+    {% elif v >= 47.80 %} {{ (40 + (v - 47.80) / (48.20 - 47.80) * (50 - 40)) | round(1) }}
+    {% elif v >= 47.24 %} {{ (30 + (v - 47.24) / (47.80 - 47.24) * (40 - 30)) | round(1) }}
+    {% elif v >= 46.64 %} {{ (20 + (v - 46.64) / (47.24 - 46.64) * (30 - 20)) | round(1) }}
+    {% elif v >= 46.04 %} {{ (10 + (v - 46.04) / (46.64 - 46.04) * (20 - 10)) | round(1) }}
+    {% elif v >= 42.00 %} {{ (0 + (v - 42.00) / (46.04 - 42.00) * (10 - 0)) | round(1) }}
+    {% else %} 0 {% endif %}
+
+- name: "Main UPS: on battery time left to 10% (computed from the voltage)"
+  unique_id: "main_ups_battery_time_to_10"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'h'
+  device_class: duration
+  # batt_freshness is how fresh the batteries are: 1 is brand new, downto 0.1 of pretty old
+  # batt_wattage is the current pack nominal wattage in W/h
+  value_template: >-
+    {% set chleft = (float(states('sensor.main_ups_battery_charge_computed_from_voltage')) - 10.0) / 100.0 %}
+    {% set load = float(states('sensor.main_ups_load')) %}
+    {% set batt_freshness = 1.0 %}
+    {% set batt_wattage = 100.0 * 12.0 * 4.0 * 0.8 * batt_freshness %}
+    {{ (batt_wattage * chleft / load) |round(1) }}
+
+- name: "Main UPS: on battery time left to 50% (computed from the voltage)"
+  unique_id: "main_ups_battery_time_to_50"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'h'
+  device_class: duration
+  value_template: >-
+    {% set chleft = (float(states('sensor.main_ups_battery_charge_computed_from_voltage')) - 50.0) / 100.0 %}
+    {% set load = float(states('sensor.main_ups_load')) %}
+    {% set batt_freshness = 1.0 %}
+    {% set batt_wattage = 100.0 * 12.0 * 4.0 * 0.8 * batt_freshness %}
+    {{ (batt_wattage * chleft / load) |round(1) }}

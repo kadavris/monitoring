@@ -1,0 +1,99 @@
+  - title: Power
+    path: power
+    icon: mdi:lightning-bolt
+    cards:
+      - type: entity
+        entity: sensor.main_ups_state_freshness
+        theme: stell_blue_with_colors
+        icon: mdi:lightbulb-question
+        state_color: true
+      - graph: line
+        type: sensor
+        entity: sensor.main_ups_input_voltage
+        detail: 1
+        hours_to_show: 6
+        theme: dark_orange
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.main_ups_battery_voltage
+            theme: dark_orange
+            min: 42
+            max: 52
+            severity:
+              green: 48.4
+              yellow: 47.5
+              red: 46
+            needle: true
+          - type: entities
+            entities:
+              - entity: sensor.main_ups_battery_charge_computed_from_voltage
+                name: Charge
+              - entity: >-
+                  sensor.main_ups_on_battery_time_left_to_50_computed_from_the_voltage
+                name: to 50%
+                icon: mdi:battery-heart
+              - entity: >-
+                  sensor.main_ups_on_battery_time_left_to_10_computed_from_the_voltage
+                name: to 10%
+                icon: mdi:battery-off-outline
+            theme: dark_orange
+            state_color: true
+      - type: entities
+        entities:
+          - entity: sensor.main_ups_in_voltage_mean_minute
+            name: 'Main UPS: Mean V/minute'
+            icon: mdi:square-wave
+          - entity: sensor.main_ups_in_voltage_mean_hour
+            name: 'Main UPS: Mean V/hour'
+          - entity: sensor.main_ups_in_voltage_mean_day
+            name: 'Main UPS: Mean V/day'
+            icon: mdi:waves
+          - entity: sensor.main_ups_in_freq_mean_hour
+            icon: mdi:heart-cog
+          - entity: sensor.main_ups_blackouts_detected
+          - entity: sensor.main_ups_time_in_blackouts
+        state_color: false
+        show_header_toggle: false
+    badges:
+      - type: entity
+        show_name: false
+        show_state: true
+        show_icon: true
+        entity: sensor.main_ups_state
+        icon: mdi:power-socket-eu
+      - type: entity
+        show_name: false
+        show_state: true
+        show_icon: true
+        entity: sensor.main_ups_alarms
+        state_content: ups_alarm
+        show_entity_picture: false
+        icon: mdi:alarm-light
+        color: pink
+      - type: entity
+        show_name: false
+        show_state: true
+        show_icon: true
+        entity: sensor.main_ups_temperature
+        state_content: ups_temperature
+        icon: mdi:thermometer
+      - type: entity
+        show_name: false
+        show_state: true
+        show_icon: true
+        entity: sensor.main_ups_load
+        icon: mdi:weight
+      - type: entity
+        show_name: false
+        show_state: true
+        show_icon: true
+        entity: sensor.main_ups_battery_charge_from_device
+        show_entity_picture: false
+      - type: entity
+        show_name: false
+        show_state: true
+        show_icon: true
+        entity: sensor.main_ups_battery_time_left_by_device
+        show_entity_picture: false
+        name: Time left
