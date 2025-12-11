@@ -106,11 +106,11 @@ except Exception as e:
 
 # Define output file paths
 yaml_mqtt_dir = script_config['DEFAULT'].get('yaml_mqtt_dir', 'inc/mqtt/sensor/')
-yaml_sensors_dir = script_config['DEFAULT'].get('yaml_sensors_dir', 'inc/sensor/')
+yaml_template_dir = script_config['DEFAULT'].get('yaml_template_dir', 'inc/template/')
 
 # Ensure directories exist
 os.makedirs(yaml_mqtt_dir, exist_ok=True)
-os.makedirs(yaml_sensors_dir, exist_ok=True)
+os.makedirs(yaml_template_dir, exist_ok=True)
 
 m2mq_ini_path = script_config['DEFAULT'].get('service_ini')
 if not m2mq_ini_path:
@@ -148,18 +148,18 @@ for host in m2mq_config.sections():
         continue
 
     yaml_mqtt_file = os.path.join(yaml_mqtt_dir, f"mqtt-sensor-mikrotik-{host_lower}-autogen.yaml")
-    yaml_sensors_file = os.path.join(yaml_sensors_dir, f"sensor-mikrotik-{host_lower}-autogen.yaml")
+    yaml_template_file = os.path.join(yaml_template_dir, f"template-mikrotik-{host_lower}-autogen.yaml")
 
     try:
         with open(yaml_mqtt_file, 'w') as yaml_mqtt_h, \
-             open(yaml_sensors_file, 'w') as yaml_sensors_h:
+             open(yaml_template_file, 'w') as yaml_template_h:
 
             # Write headers and host-specific separators
-            yaml_mqtt_h.write(header + "# mqtt:\n#   sensor: !include_dir_merge_list inc/mqtt/sensor\n\n")
-            yaml_sensors_h.write(header + "# sensor: !include_dir_merge_list inc/sensor/\n\n")
+            yaml_mqtt_h.write(header + f"# mqtt:\n#   sensor: !include_dir_merge_list {yaml_mqtt_dir}\n\n")
+            yaml_template_h.write(header + f"# template: !include_dir_merge_list {yaml_template_dir}\n\n")
 
             yaml_mqtt_h.write(separator + f"# host: {host_lower}" + separator)
-            yaml_sensors_h.write(separator + f"# host: {host_lower}" + separator)
+            yaml_template_h.write(separator + f"# host: {host_lower}" + separator)
 
             # --- General Data (State, Last Update, Temp, Voltage, Upgrades) ---
             yaml_mqtt_h.write(f"""
@@ -288,46 +288,44 @@ for host in m2mq_config.sections():
 
             # --- General Sensor Definitions and Helpers (Home Assistant Template Sensors) ---
             overheat_temp = script_config['DEFAULT'].get('overheat', '60')  # Default overheat
-            yaml_sensors_h.write(f"""
-- platform: template
-  sensors:
-    {host_lower}_freshness:
-      friendly_name: "{host_lower}: data freshness check"
-      value_template: >-
-        {{% set topic_u = 'sensor.{host_lower}_last_update' %}}
-        {{% if states( topic_u ) == 'unknown' %}}
-          NO DATA!
-        {{% elif as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}}
-          OLD: {{{{ state_attr( topic_u, 'date' ) }}}}
-        {{% else %}}
-          OK
-        {{% endif %}}
+            yaml_template_h.write(f"""
+- sensor:
+  - default_entity_id: sensor.{host_lower}_freshness
+    name: "{host_lower}: data freshness check"
+    state: >-
+      {{% set topic_u = 'sensor.{host_lower}_last_update' %}}
+      {{% if states( topic_u ) == 'unknown' %}}
+        NO DATA!
+      {{% elif as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}}
+        OLD: {{{{ state_attr( topic_u, 'date' ) }}}}
+      {{% else %}}
+        OK
+      {{% endif %}}
 
-      icon_template: >-
-        {{% set topic_u = 'sensor.{host_lower}_last_update' %}}
-        {{% if states( topic_u ) == 'unknown' %}}
-          mdi:database-remove-outline
-        {{% elif as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}}
-          mdi:disc-alert
-        {{% else %}}
-          mdi:harddisk
-        {{% endif %}}
+    icon: >-
+      {{% set topic_u = 'sensor.{host_lower}_last_update' %}}
+      {{% if states( topic_u ) == 'unknown' %}}
+        mdi:database-remove-outline
+      {{% elif as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}}
+        mdi:disc-alert
+      {{% else %}}
+        mdi:harddisk
+      {{% endif %}}
 
-- platform: template
-  sensors:
-    {host_lower}_problems:
-      friendly_name: "{host_lower}: problems"
-      value_template: >-
-        {{% if states( 'sensor.{host_lower}_freshness' ) != "OK" %}}
-          {{{{ states( 'sensor.{host_lower}_freshness' ) }}}}
-        {{% else %}}
-          {{% if states( 'sensor.{host_lower}_temperature' ) != 'unknown' %}}
-            {{% if states( 'sensor.{host_lower}_temperature' )|float > {overheat_temp} %}}
-              OVERHEATING: {{{{ states( 'sensor.{host_lower}_temperature' ) }}}}
-              ( {{{{ states( 'sensor.{host_lower}' ) }}}} )
-            {{% endif %}}
+- sensor:
+  - default_entity_id: sensor.{host_lower}_problems
+    name: "{host_lower}: problems"
+    state: >-
+      {{% if states( 'sensor.{host_lower}_freshness' ) != "OK" %}}
+        {{{{ states( 'sensor.{host_lower}_freshness' ) }}}}
+      {{% else %}}
+        {{% if states( 'sensor.{host_lower}_temperature' ) != 'unknown' %}}
+          {{% if states( 'sensor.{host_lower}_temperature' )|float > {overheat_temp} %}}
+            OVERHEATING: {{{{ states( 'sensor.{host_lower}_temperature' ) }}}}
+            ( {{{{ states( 'sensor.{host_lower}' ) }}}} )
           {{% endif %}}
         {{% endif %}}
+      {{% endif %}}
 """)
 
     except IOError as e:
