@@ -1,0 +1,32 @@
+# NOTE: This file is included from the main configuration.yaml by the statement:
+# template: !include_dir_merge_list inc/template/
+
+#------------------------------------------------
+# UPS:
+#------------------------------------------------
+- sensor:
+  - default_entity_id:  sensor.main_ups_state_freshness
+    name: "Main UPS: data freshness check"
+    state: >-
+      {% set topic_u = 'sensor.main_ups_last_update' %}
+      {% if states( topic_u )|float(default=-1.0) == -1 %}
+        NO DATA!
+      {% else %}
+        {% if as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          OLD: {{ state_attr( topic_u, 'date' ) }}
+        {% else %}
+          OK
+        {% endif %}
+      {% endif %}
+
+    icon: >-
+      {% set topic_u = 'sensor.main_ups_last_update' %}
+      {% if states( topic_u )|float(default=-1.0) == -1 %}
+          mdi:battery-unknown
+      {% else %}
+        {% if as_timestamp(now()) - ( states( topic_u )|float ) > 1800 %}
+          mdi:battery-unknown
+        {% else %}
+          mdi:battery-heart-variant
+        {% endif %}
+      {% endif %}
