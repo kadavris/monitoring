@@ -869,14 +869,14 @@ def poll_device() -> None:
 # MAIN
 global GLOBAL_CONFIG, Sender
 
-config_path = '/etc/smarthome/reporters/mikrotik2mqtt.ini'  # default
+def_config_path = '/etc/smarthome/monitoring/mikrotik/mikrotik2mqtt.ini'  # default
 
 parser = argparse.ArgumentParser(
-    description='Queries MikroTik router(s) for statistics data and pushes it to the mqtt agent.\n' +
-                'Copyright by Andrej Pakhutin (pakhutin <at> gmail)\n' +
+    description='Queries MikroTik router(s) for statistics data and pushes it to the mqtt agent. ' +
+                'Copyright by Andrej Pakhutin (pakhutin <at> gmail). ' +
                 'V1.110')
-parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
-                    help='path to non-default (' + config_path + ') config file')
+parser.add_argument('-c', '--config', dest='config_path', action='store', default=def_config_path,
+                    help='path to non-default config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
                     help='debug mode')
 parser.add_argument('-l', '--loop', dest='loop', action='store_true', default=False,

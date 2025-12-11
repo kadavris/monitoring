@@ -5,8 +5,8 @@ After=network.target nut-server.service
 [Service]
 User=nut
 Group=smarthome
-ExecStart=/etc/smarthome/reporters/mqtt-power --loop 20
-WorkingDirectory=/etc/smarthome/reporters
+ExecStart=/usr/local/lib/kadavris/monitoring/mqtt-power --loop 20 --config=/etc/smarthome/monitoring/power/mqtt-power.ini
+WorkingDirectory=/etc/smarthome/monitoring/power
 Restart=on-failure
 RestartSec=5
 

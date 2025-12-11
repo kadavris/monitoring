@@ -458,14 +458,14 @@ def check_nut() -> None:
 global Sender, GLOBAL_CONFIG
 
 
-config_path = '/etc/smarthome/reporters/reporters.ini'  # default
+def_config_path = '/etc/smarthome/monitoring/power/mqtt-power.ini'  # default
 
 parser = argparse.ArgumentParser(
-    description='Collecting electrical power info and passing it to mqtt agent. V2.5.1119.'
+    description='Collecting power supply info and passing it to mqtt agent. V2.5.1119.'
                 ' Created by Andrej Pakhutin - pakhutin at gmail.'
     )
-parser.add_argument('-c', '--config', dest='config_path', action='store', default=config_path,
-                    help='path to non-default (' + config_path + ') config file')
+parser.add_argument('-c', '--config', dest='config_path', action='store', default=def_config_path,
+                    help='path to non-default config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
                     help='debug mode')
 parser.add_argument('-l', '--loop', dest='loop', action='store', type=int, default=-1,

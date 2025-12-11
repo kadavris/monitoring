@@ -828,15 +828,16 @@ val_less_than_threshold = {
     "220": True, "221": True, "227": True, "228": True, "250": True, "254": True
 }
 
-config_path = "/etc/smarthome/reporters/reporters.ini"  # default
+def_config_path = "/etc/smarthome/monitoring/storage"  # defaults
+def_config_file = def_config_path + "/mqtt-storage.ini"
 
 ####################################################
 
 parser = argparse.ArgumentParser(
     description="Collect state info from the storage and post it to mqtt.\n"
                 "V2.011. Copyright (c) 2022+ by Andrej Pakhutin")
-parser.add_argument("-c", "--config", dest="config_path", action="store", default=config_path,
-                    help="path to a non-default (" + config_path + ") config file")
+parser.add_argument("-c", "--config", dest="config_path", action="store", default=def_config_file,
+                    help="path to a non-default config file")
 parser.add_argument("-d", "--debug", dest="debug", action="store_true", default=False, help="debug mode")
 parser.add_argument("-l", "--loop", dest="loop", action="store", type=int, default=0,
                     help="Loop forever, sleeping <int> seconds between passes")
@@ -844,7 +845,7 @@ parser.add_argument("action", nargs="?", default="", help="non-default action na
 
 args = parser.parse_args()
 
-load_config(args.config_path, '/etc/smarthome/reporters/')
+load_config(args.config_path, def_config_path)
 config = config_full['storage']
 
 hba = socket.gethostbyaddr(socket.gethostname())

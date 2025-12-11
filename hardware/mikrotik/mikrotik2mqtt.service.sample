@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User=smarthome
 Group=smarthome
-ExecStart=/etc/smarthome/reporters/mikrotik2mqtt --loop
-WorkingDirectory=/etc/smarthome/reporters
+ExecStart=/usr/local/lib/kadavris/monitoring/mikrotik2mqtt --loop --config=/etc/smarthome/monitoring/mikrotik/mikrotik2mqtt.ini
+WorkingDirectory=/etc/smarthome/monitoring/mikrotik
 Restart=on-failure
 RestartSec=5
 
