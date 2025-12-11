@@ -496,7 +496,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         else:
             if last_short_test_age > max_tests_age:
                 short_tests_status = " and SHORT tests also didn't run for " \
-                                     + str(last_short_test_age // 24) + " days"
+                                     + str(round(last_short_test_age / 24)) + " days"
 
         if last_long_test_age == sys.maxsize:
             if ret["tests inconclusive"] > 0:
@@ -506,14 +506,18 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         else:
             if last_long_test_age > max_tests_age:
                 ret["testing status"] = "LONG tests didn't run for " \
-                                        + str(last_long_test_age // 24) \
-                                        + " days (max: " + str(max_tests_age // 24) + ")" + short_tests_status
+                        + str(round(last_long_test_age / 24)) \
+                        + " days (max: " + str(round(max_tests_age / 24)) \
+                        + ")" + short_tests_status
 
         if ret["testing status"] == "":
             ret["testing status"] = "OK"
+        elif len(ret["testing status"]) > 254:
+            ret["testing status"] = ret["testing status"][:250] + "..."
 
         if post_data:
-            send_long(device_topic + '/' + config["tests_log_topic"], "{\n", ",\n  ".join(post_data), "\n}")
+            send_long(device_topic + '/' + config["tests_log_topic"], "{\n",
+                      ",\n  ".join(post_data), "\n}")
             del sctl_json["ata_smart_error_log"]
 
     return True
