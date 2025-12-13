@@ -9,7 +9,7 @@ state_topic = state
 
 # tool to actually post data to the mqtt
 # see http://github.com/kadavris/mqtt-tool for a working solution
-sender = /etc/smarthome/mqtt/mqtt --stdin --quiet power-reports
+sender = /usr/local/lib/kadavris/mqtt/mqtt --config=/etc/smarthome/mqtt/mqtt.ini --stdin --quiet power-reports
 
 ;====================================
 [power]
