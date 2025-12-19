@@ -1,5 +1,5 @@
 [Unit]
-Description=Storage status to MQTT daemon
+Description=Storage devices health status reporting through MQTT daemon
 After=syslog.target network.target
 
 [Service]
