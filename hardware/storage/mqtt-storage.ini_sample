@@ -43,16 +43,22 @@ temperature_topic = temperature
 ; warn if test were not done for this amount of hours ( default is 7 days = 168 hours )
 ;max_tests_age = 168
 
-; if your controller is weird or just USB to ATA, then you may want to provide
-; some additional options to smartctl like this:
-<modelname> = <option>[|<option>]... - additional model-specific options
-;             look up model name in /sys/block/sd?/device/model. Spaces will be removed on lookup!
-;             To specify additional smartctl parameter,
-;             use 'scopt=<single smartctl option>' syntax
+; Comma-separated list of device types that you want to skip reports for.
+; ata, sat/usb, nvme and scsi are included by default.
+;skip_dev_types = usb
+
+; How many seconds to work on a dev list w/o refreshing it
+;refresh_dev_list = 1800
 
 ; This is individual drive model settings:
-; The format of key name is drive model, as reported by smartctl, but without spaces
-; The flags in list should be separated by the pipe "|" symbol:
+; if your controller is weird or just an USB to ATA, then you may want to provide
+; some additional options to smartctl like this:
+;<modelname> = <option>[|<option>]... - additional model-specific options
+;    model name come from /sys/block/sd?/device/model.
+;    Spaces will be removed in the process!
+;    To specify additional smartctl parameter,
+;    use 'scopt=<single smartctl option>' syntax
+; Other options:
 ;    no_tests_log - if you have the drive like intel 520 series that does not provide tests log at all
 ;    short_test_log_time - Spotted on my WD AV-GP: When lifetime in test log is 2byte
 ;                          and reported as remainder of "Power On hours" division by 65536

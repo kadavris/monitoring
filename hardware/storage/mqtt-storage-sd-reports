@@ -50,6 +50,7 @@ import subprocess
 import sys
 import time
 
+known_dev_types = ['ata', 'sat', 'nvme', 'scsi']
 
 #############################################################
 def handle_termination(*_) -> None:
@@ -280,62 +281,27 @@ def nested_keys_exists(in_hash, *keys) -> bool:
 
 
 ########################################
-def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
+def get_nested(default, tree: dict, *keys: str):
     """
-    This routine will parse the JSON formatted output from smartctl
-    and will send processed stuff to the mqtt topics hierarchy (see top of file for explanation)
-    NOTE: The combined state analysis will be posted in do_smartctl() final
-    NOTE2: post_data is re-used to post large raw chunks of intermediate data to MQTT.
-           E.g. attributes array if attributes_topic is configured
+    Scans tree for nested keys and return the final branch value or default if path is not found
+    :param default: default value to return
+    :param tree: dict with tree
+    :param keys: list of sub-keys to scan
+    :return: found key or default value
+    """
+    for k in keys:
+        if k not in tree:
+            return default
+        tree = tree[k]
 
-    :param sctl_output_text: raw smartctl output
-    :param ret: returns the parsed data here - see do_smartctl for details
-    :param device_topic: name of mqtt topics base for reports
-    :return: bool: False if processing error were encountered
-    """
+    return tree
+
+
+########################################
+def process_ata_attributes(sctl_json: dict, ret: dict, post_data: list) -> None:
     global args, config
 
-    try:
-        sctl_json = json.loads(sctl_output_text)
-    except:
-        return False
-
-    if "model_name" not in sctl_json:
-        ret["status"] = "smartctl returned incompete data"
-        return False
-
-    if sctl_json["json_format_version"][0] != 1 and sctl_json["json_format_version"][1] != 0:
-        ret["warnings"].append("Newer smartctl report version!")
-        ret["warnings count"] += 1
-
-    ret["model"] = sctl_json["model_name"]
-    ret["serial"] = sctl_json["serial_number"]
-    ret["id"] = sctl_json["model_name"] + " " + sctl_json["serial_number"]
-
-    model_flags = sctl_json["model_name"].replace(" ", "")
-    if model_flags in config:
-        model_flags = config[model_flags].replace(" ", "").split("|")
-    else:
-        model_flags = []
-
-    if nested_keys_exists(sctl_json, "device", "type") and sctl_json["device"]["type"] == "nvme":
-            ret["type"] = "NVMe"
-    else:
-        if ("trim" in sctl_json) and sctl_json["trim"]["supported"]:
-            ret["type"] = "SSD"
-        else:
-            ret["type"] = "HDD"
-
-    ret["temperature"] = int(sctl_json["temperature"]["current"]) if "temperature" in sctl_json else -1
-
-    ret["power on time"] = int(sctl_json["power_on_time"]["hours"]) if "power_on_time" in sctl_json else -1
-
     sctl_attr_table = sctl_json["ata_smart_attributes"]["table"]
-
-    if "attributes_topic" in config:  # we'll extract shorter attributes list for posting into separate topic
-        post_data = []
-    else:
-        post_data = None
 
     for sctl_attr in sctl_attr_table:
         if post_data:
@@ -343,10 +309,13 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
                                              + '", "value":"' + str(sctl_attr["value"])
                                              + '", "raw":"' + sctl_attr["raw"]["string"] + '" }')
 
-        if sctl_attr["id"] in val_less_than_threshold:  # check if value has crossed threshold
+        # check if value has crossed threshold.
+        # The table format is <attribute #>: <bad values are less than threshold: bool>
+        if sctl_attr["id"] in val_less_than_threshold:
             if (val_less_than_threshold[sctl_attr["id"]] and sctl_attr["value"] < sctl_attr["thresh"]) \
                or (not val_less_than_threshold[sctl_attr["id"]] and sctl_attr["value"] > sctl_attr["thresh"]):
 
+                # determining the severity type of failed attribute
                 err_or_warn_section = ""
                 with sctl_attr["flags"] as flags:
                     if flags["prefailure"] or flags["error_rate"]:
@@ -364,9 +333,6 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
                     ret[err_or_warn_section].append(msg)
                     ret[err_or_warn_section + " count"] += 1
 
-        # ----------------------------------------
-        # Looking at the specific attributes here:
-
         # 190 Airflow_Temperature_Cel 0x0032   065   050   000    Old_age   Always       -       35
         if ret["temperature"] == -1 and (sctl_attr["id"] == 190 or sctl_attr["id"] == 194):
             ret["temperature"] = int(sctl_attr["value"])
@@ -376,6 +342,92 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         elif ret["power on time"] == -1 and sctl_attr["id"] == 9:
             ret["power on time"] = int(sctl_attr["value"])
 
+
+########################################
+def process_nvme_attributes(sctl_json: dict, ret: dict, post_data: list) -> None:
+    section = sctl_json["nvme_smart_health_information_log"]
+    if count := section.get("critical_warning", 0) > 0:
+        ret["errors"].append("Have a critical warning")
+        ret["errors count"] += 1
+
+    if section.get("available_spare", 100) < section.get("available_spare_threshold", 0):
+        ret["warnings"].append("Available spare" + str(section.get("available_spare", 100)))
+        ret["warnings count"] += 1
+
+    if section.get("percentage_used", 0) > 80:
+        ret["errors"].append("Media lifetime is at " + str(section.get("percentage_used", 0)) + "%")
+        ret["errors count"] += 1
+
+    if section.get("media_errors", 0):
+        ret["errors"].append("Media errors at " + str(section.get("media_errors", 0)))
+        ret["errors count"] += 1
+
+
+########################################
+def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
+    """
+    This routine will parse the JSON formatted output from smartctl
+    and will send processed stuff to the mqtt topics hierarchy (see top of file for explanation)
+    NOTE: The combined state analysis will be posted in do_smartctl() final
+    NOTE2: post_data is re-used to post large raw chunks of intermediate data to MQTT.
+           E.g. attributes array if attributes_topic is configured
+
+    :param sctl_output_text: raw smartctl output
+    :param ret: returns the parsed data here - see do_smartctl for details
+    :param device_topic: name of mqtt topics base for reports
+    :return: bool: False if processing error were encountered
+    """
+    global args, config
+
+    try:
+        sctl_json = json.loads(sctl_output_text)
+    except json.JSONDecodeError:
+        return False
+
+    if "model_name" not in sctl_json:
+        ret["status"] = "drive is not compliant or smartctl returned incomplete data"
+        return False
+
+    if sctl_json["json_format_version"][0] != 1 and sctl_json["json_format_version"][1] != 0:
+        ret["warnings"].append("Newer smartctl report version!")
+        ret["warnings count"] += 1
+
+    ret["model"] = sctl_json["model_name"]
+    ret["serial"] = sctl_json["serial_number"]
+    ret["id"] = sctl_json["model_name"] + " " + sctl_json["serial_number"]
+
+    # retrieving specific model flags from config
+    model_flags = sctl_json["model_name"].replace(" ", "")
+    if model_flags in config:
+        model_flags = config[model_flags].replace(" ", "").split("|")
+    else:
+        model_flags = []
+
+    if get_nested("", sctl_json, "device", "type") == "nvme":
+            ret["type"] = "NVMe"
+    else:
+        if get_nested(False, sctl_json, "trim", "supported"):
+            ret["type"] = "SSD"
+        else:
+            ret["type"] = "HDD"
+
+    ret["temperature"] = get_nested(-1, sctl_json, "temperature", "current")
+
+    ret["power on time"] = get_nested(-1, sctl_json, "power_on_time", "hours")
+
+    # Processing attributes
+    if "attributes_topic" in config:  # we'll extract shorter attributes list for posting into separate topic
+        post_data = []
+    else:
+        post_data = None
+
+    if ret['type'] == "NVMe":
+        process_nvme_attributes(sctl_json, ret, post_data)
+    else:
+        process_ata_attributes(sctl_json, ret, post_data)
+
+    # Looking at the specific attributes here:
+
     if post_data:
         send_long(device_topic + '/' + config["attributes_topic"], "{\n", ",\n  ".join(post_data), "\n}")
         del sctl_json["ata_smart_attributes"]
@@ -384,9 +436,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
     # =============================================================
     # In this section we will check the error log for fresh entries
 
-    if nested_keys_exists(sctl_json, "ata_smart_error_log", "summary", "logged_count") \
-            and sctl_json["ata_smart_error_log"]["summary"]["logged_count"] > 0:
-
+    if get_nested(0, sctl_json, "ata_smart_error_log", "summary", "logged_count") > 0:
         if "error_log_topic" in config:  # we'll extract shorter attributes list for posting into separate topic
             post_data = []
         else:
@@ -406,7 +456,7 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
             ret[err_or_warn_section].append(msg)
             ret[err_or_warn_section + " count"] += 1
 
-            # record the age of an earliest problem, so messages will be a bit more meaningful
+            # record the age of earliest problem, so messages will be a bit more meaningful
             err_age_section = err_or_warn_section + " age"
             err_age = (int(ret["power on time"]) - int(elog["lifetime_hours"])) // 24
             if not err_age_section in ret or int(ret[err_age_section]) > err_age:
@@ -419,13 +469,21 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
             if "previous_commands" in elog:
                 msg += ", CMD: " + elog["previous_commands"][0]["command_name"]
 
+    # posting error log analysis
     if post_data:
         send_long(device_topic + '/' + config["error_log_topic"], "{\n", ",\n  ".join(post_data), "\n}")
         del sctl_json["ata_smart_error_log"]
 
     # =============================================================
     #  In this section we check the tests log for problems
-    if not nested_keys_exists(sctl_json, "ata_smart_self_test_log", "standard", "table"):
+    if ret["type"] == "NVMe":
+        tests_table = get_nested(None, sctl_json, "nvme_self_test_log", "table")
+    else:
+        tests_table = get_nested(
+            get_nested(None, sctl_json, "ata_smart_self_test_log", "standard", "table"),
+                                 sctl_json, "ata_smart_self_test_log", "extended", "table")
+
+    if not tests_table:
         if "no_tests_log" not in model_flags:
             ret["testing status"] = "NO tests were recorded! Or test logging is not supported."
         else:
@@ -440,9 +498,9 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         last_short_test_age = sys.maxsize
         last_long_test_age = sys.maxsize
 
-        # to properly report unfinished tests we'll count only the latest (topmost)
-        # Mark as True because it is reset on 1st passed,
-        # and still we need to report first in list if it failed
+        # If a number of the last long tests were not finished, we report inconclusive state with count.
+        # Flag initially set to True because it is reset on the 1st passed test record,
+        # and yet we need to report first ones in list if some failed
         last_inconclusive = True
 
         if "short_test_log_time" in model_flags:  # if test log time is stored as uint16
@@ -450,41 +508,50 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
         else:
             lifetime = ret["power on time"]
 
-        for tlog in sctl_json["ata_smart_self_test_log"]["standard"]["table"]:
+        for tlog in tests_table:
             ret["tests done"] += 1
+            if ret["type"] == "NVMe":
+                test_type = tlog["self_test_code"]["value"]
+                test_result = get_nested(-1, tlog, "self_test_result", "value")
+                test_result_str = get_nested("", tlog, "self_test_result", "string")
+                test_date = tlog["power_on_hours"]
+            else:
+                test_type = tlog["type"]["value"]
+                test_result = get_nested(-1, tlog, "status", "value")
+                test_result_str = get_nested("", tlog, "status", "string")
+                test_date = tlog["lifetime_hours"]
 
             # test record may lack "passed" attribute if test has been interrupted.
             # we'll not count this at all, but report inconclusive if it is the latest one(s)
-            if "passed" not in tlog["status"]:
-                if tlog["type"]["value"] == 2:  # only long ones count
+            if test_result != 0:
+                if test_type == 2:  # only long ones count
                     if last_inconclusive:
                         ret["tests inconclusive"] += 1
                 continue
             else:
-                last_inconclusive = False
+                last_inconclusive = False  # don't report older, interrupted tests into inconclusive
 
-            test_date = tlog["lifetime_hours"]
-
-            # calculating time difference
+            # recording the freshest test times in each category to report stale state or routine checks
             if lifetime < test_date: # happens on short int wrap
                 tdiff = lifetime - (65535 - test_date)
             else:
                 tdiff = lifetime - test_date
 
-            if tlog["type"]["value"] == 1:  # Short offline
+            if test_type == 1:  # Short offline
                 if tdiff < last_short_test_age:
                     last_short_test_age = tdiff
-            elif tlog["type"]["value"] == 2:  # Extended offline
+            elif test_type == 2:  # Extended offline
                 if tdiff < last_long_test_age:
                     last_long_test_age = tdiff
 
-            if not tlog["status"]["passed"]:
-                ret["testing status"] += tlog["status"]["string"] + " @ " + str(test_date) + "\n"
+            if test_result != 0:
+                ret["testing status"] += test_result_str + " @ " + str(test_date) + "\n"
                 ret["tests failed"] += 1
 
                 if post_data:
                     post_data.append(str(test_date) + ':"'
-                                     + tlog["status"]["string"].replace('"', r'\"') + '"')
+                                     + test_result_str.replace('"', r'\"') + '"')
+        # end of test logs scan. preparing summary report
 
         # we'll report short tests problems if there are problems with long test too
         short_tests_status = ""
@@ -519,12 +586,20 @@ def process_sctl_json(sctl_output_text, ret, device_topic) -> bool:
             send_long(device_topic + '/' + config["tests_log_topic"], "{\n",
                       ",\n  ".join(post_data), "\n}")
             del sctl_json["ata_smart_error_log"]
+    # done with test logs.
+
+    if ret['type'] == "SSD":
+        if nested_keys_exists("endurance_used", "current_percent"):
+            v = sctl_json["endurance_used"]["current_percent"]
+            if v > 80:
+                ret["errors"].append("Media lifetime is at " + str(v) + "%")
+                ret["errors count"] += 1
 
     return True
 
 
 ########################################
-def run_smartctl(device: str, *in_params) -> []:
+def run_smartctl(device: str, *in_params) -> tuple[str, str]:
     """
     Prepares smartctl arguments and runs it
 
@@ -532,36 +607,48 @@ def run_smartctl(device: str, *in_params) -> []:
     :param in_params: list of parameters
     :return: ( 'results string', 'error message if any' )
     """
-    global config
+    global args, config, devices
 
     # preparing smartctl parameters:
     params = [config["smartctl"]]
     params.extend(in_params)
 
     if device != '':
+        # Hopefully should eliminate most of these:
+        # "messages": [ { "string": "/dev/sdX: Unknown USB bridge [0xXXXX:0xXXXX]", "severity": "error" } ]
+        if devices[device]["type"] == "usb":
+            params.append("-d sat")
+        elif devices[device]["type"] in ["sat"]:
+            params.append("-d " + devices[device]["type"])
+
         # looking if there are specific smartctl switches to add
-        for f in devices_cache[device]["scopts"]:
+        for f in devices[device]["scopts"]:
             params.append(f)
 
         params.append("/dev/" + device)
 
-    sctl = subprocess.Popen(params, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=False)
+    if args.debug:
+        print("RUN: <", '> <'.join(params), '>', sep='', file=sys.stderr)
+
+    sctl = subprocess.Popen(params, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, shell=False)
 
     if sctl.poll():
-        ret = ''
         if sctl.returncode > 0:
-            ret = 'smartctl error: ended with rc: ' + str(sctl.returncode)
-            print(ret)
-        return ('', ret)  # may be empty
+            err = 'smartctl run error: ended with rc: ' + str(sctl.returncode)
+            print(err)
+            return '', err
+
+        return '', 'smartctl run just failed'
 
     ret, err = sctl.communicate()  # communicate() will return all output at once
     sctl.terminate()
 
-    return (ret, err)
+    return ret, err
 
 
 ########################################
-def do_smartctl(device: str, device_topic: str) -> dict:
+def do_smartctl_proces(device: str, device_topic: str) -> dict:
     """
     Collects data from smartctl. Run parser. Post basic data.
 
@@ -569,7 +656,7 @@ def do_smartctl(device: str, device_topic: str) -> dict:
     :param device_topic: root topic for this device
     :return: hash made by process_sctl_json() or other low-level data processor
     """
-    global args, config
+    global args, config, devices
 
     ret = {  # pre-init and show what we want to get from smartctl
         "errors count": 0,    # total number of error conditions encountered
@@ -589,7 +676,9 @@ def do_smartctl(device: str, device_topic: str) -> dict:
         "warnings": [],       # array of all warning conditions in string form
     }
 
-    json_string, err = run_smartctl(device, '-a', '-j')
+    params = [ '-a', '-j' ]
+
+    json_string, err = run_smartctl(device, *params)
 
     if err != "":
         ret["status"] = ',"smartctl error":"' + err + "'"
@@ -609,37 +698,41 @@ def do_smartctl(device: str, device_topic: str) -> dict:
 
     return ret
 
-
 ########################################
-def check_storage_sd() -> None:
+def get_devices_list():
     """
-    This function will:
-    Make preparations like drives list and pre-flight.
-    Calls configured data collector's drivin routine(s),
-    Consolidates information about reported problems and posts to device's root topic
-
-    Consult the beginning of this script for topics structure
-
+    Will refresh a list of devices to get info from.
+    Fills in the 'devices' dict
     :return: None
     """
-    global args, config, devices_cache
+    global args, config, devices
 
-    detected_devices = {}
+    # resetting with options saving
+    dev_options = devices['options']
+    devices = dict()
+    dev_options['time'] = time.time()  # setting now if there will be errors on scan
+    devices['options'] = dev_options
 
-    #  for cygwin we can filter out real drives like this
-    if sys.platform.startswith("cygwin"):
-        partitions_file = open("/proc/partitions", newline="\n").read()
-        for part in partitions_file.split("\n"):
-            # major        minor        #blocks              name            win-mounts
-            # 8            1            244196352            sda1            I:\
-            rm = re.match(r"[\s\d]+(sd[a-z])\d+\s+([A-Z]:)", part)
-            if rm:
-                detected_devices[rm.group(1)] = rm.group(2)
-            elif args.debug:
-                print(rm.group(1), "- not mounted", file=sys.stderr)
+    if sys.platform == "linux":
+        for device in os.listdir("/dev"):
+            if not re.match("sd[a-z]$", device):
+                continue
 
+            # check if it is ata/SAT ones. Currently, seen variants:
+            #   onboard:    /devices/pci0000:00/0000:00:12.0/ata1/host0/target0:0:0/0:0:0:0/block/sda
+            #   addon card: /devices/pci0000:00/0000:00:14.0/0000:02:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sdc
+            #   USB drive:  /devices/pci0000:00/0000:00:15.0/usb2/2-2/2-2:1.0/host4/target4:0:0/4:0:0:0/block/sde
+            # NOTE: reading major # from /sys/class/block/sd?/dev being a tad untidy as I think,
+            #       but I have no SCSI and nvme drives to look at under linux.
+            rm = re.search(r"/(ata|usb|scsi)\d+", os.readlink("/sys/class/block/" + device))
+            if not rm:
+                if args.debug:
+                    print(device, "- not our type", file=sys.stderr)
+                continue
 
-    elif sys.platform.startswith("win"):  # win native python. very ununixy env
+            devices[device] = { 'type': rm.group(1).lower() }
+
+    else:  # cygwin or windows native python, etc. doing slower scan
         dstr, err = run_smartctl('', '--scan')
         if err != '':
             print(err)
@@ -651,40 +744,59 @@ def check_storage_sd() -> None:
             # /dev/sde -d scsi  # /dev/sde, SCSI device
             m = re.match(r'.dev.(sd.)\s+-d\s+(\S+)', line)
             device = m.group(1)
-            type = m.group(2)
+            dtype = m.group(2)
 
-            # SCSI is a new USB now
-            if type != 'ata' and type != 'sat':
-                if args.debug:
-                    print(device, " type is ", type, file=sys.stderr)
-                continue
+            devices[device] = { 'type': dtype.lower() }
 
-            detected_devices[device] = type
+    skiplist = config['skip_dev_types'].replace(' ', '').split(',')
 
-    else:  # hope its linux
-        for device in os.listdir("/dev"):
-            if not re.match("sd[a-z]$", device):
-                continue
+    klist = list(devices.keys())
+    for d in klist:
+        if d == 'options':
+            continue
 
-            # check if it is ata one. Currently, seen variants:
-            #   onboard:    /devices/pci0000:00/0000:00:12.0/ata1/host0/target0:0:0/0:0:0:0/block/sda
-            #   addon card: /devices/pci0000:00/0000:00:14.0/0000:02:00.0/ata3/host2/target2:0:0/2:0:0:0/block/sdc
-            #   USB drive:  /devices/pci0000:00/0000:00:15.0/usb2/2-2/2-2:1.0/host4/target4:0:0/4:0:0:0/block/sde
-            # NOTE: reading major # from /sys/class/block/sd?/dev being a tad untidy as I think,
-            #       but I have no SCSI drives to look at.
-            rm = re.search(r"/devices/pci.+/ata\d+/host\d+/", os.readlink("/sys/class/block/" + device))
-            if not rm:
-                if args.debug:
-                    print(device, "- not an SCSI/ATA", file=sys.stderr)
-                continue
+        print(d, "type", devices[d]['type'], file=sys.stderr)
+        if devices[d]['type'] not in known_dev_types:
+            if args.debug:
+                print(d, "type strangely is", devices[d]['type'], file=sys.stderr)
 
-            detected_devices[device] = '-'
+            del devices[d]
+            continue
 
-    for device in detected_devices:
+        if devices[d]['type'] in skiplist:
+            if args.debug:
+                print(d, "- skipping by a skip_types rule", file=sys.stderr)
+
+            del devices[d]
+            continue
+
+
+########################################
+def check_storage() -> None:
+    """
+    This function will:
+    Make preparations like drives list and pre-flight.
+    Calls configured data collector's drivin routine(s),
+    Consolidates information about reported problems and posts to device's root topic
+
+    Consult the beginning of this script for topics structure
+
+    :return: None
+    """
+    global args, config, devices
+
+    # refresh devices list every N min
+    if devices['options']['time'] < time.time() - float(config["refresh_dev_list"]):
+        get_devices_list()
+
+    for dev_sd in devices:
+        if dev_sd == 'options':
+            continue
+
         if args.debug:
-            print("+ device:", device, file=sys.stderr)
+            print("+ device:", dev_sd, file=sys.stderr)
 
-        device_topic = config["device_topic"].replace("$device", device)
+        device_topic = config["device_topic"].replace("$device", dev_sd)
 
         # we will count the configured checks to report if none were enabled actually
         checks_run = 0
@@ -693,34 +805,31 @@ def check_storage_sd() -> None:
         state = []  # we'll try to determine it by any test enabled
         severity = 0  # how bad troubles are. 0-OK, 1-warn, >1 - crit
 
-        if device not in devices_cache:
-            devices_cache[device] = dict()
-
-        dc = devices_cache[device]
+        devinfo: dict = devices[dev_sd]
 
         # looking if there are specific model options
-        if "model flags" not in dc:  # retrieving
-            dc["model flags"] = []  # misc flags
-            dc["scopts"] = []       # smartctl options if any
+        if "model flags" not in devinfo:  # retrieving
+            devinfo["model flags"] = []  # misc flags
+            devinfo["scopts"] = []       # smartctl options if any
 
             try:
-                dc["model"] = open("/sys/block/" + device + "/device/model").readline()
-                m = dc["model"].replace(" ", "")
+                devinfo["model"] = open("/sys/block/" + dev_sd + "/device/model").readline()
+                m = devinfo["model"].replace(" ", "")
 
-                if m in config:
+                if m in config:  # have a section in .ini
                     for f in config[m].split("|"):
                         if f[1:6] == "scopt=":
-                            dc["scopts"].append(f[7:])
+                            devinfo["scopts"].append(f[7:])
                         else:
-                            dc["model flags"].append(f)
-            except FileNotFoundError:  # win/cygwin has no /sys
-                dc["model"] = "_"
+                            devinfo["model flags"].append(f)
+            except FileNotFoundError:  # (cyg)win has no /sys, but we'll get info from sctl output
+                devinfo["model"] = "_"
 
         # doing nagios's check_ide_smart run if configured. it is really simple.
         if "check_ide_smart" in config:
             checks_run += 1
             params = shlex.split(config["check_ide_smart"])
-            params.append("/dev/" + device)
+            params.append("/dev/" + dev_sd)
             cis = subprocess.Popen(params, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
             st, err = cis.communicate()  # communicate will slurp output and close pipe
@@ -734,11 +843,11 @@ def check_storage_sd() -> None:
         # doing smartctl run if configured
         if "smartctl" in config:
             checks_run += 1
-            sctl_data = do_smartctl(device, device_topic)
+            sctl_data = do_smartctl_proces(dev_sd, device_topic)
 
             if sctl_data["model"] == "UNKNOWN":
                 if args.debug:
-                    print("! smartctl failed to fetch data for:", device, file=sys.stderr)
+                    print("! smartctl failed to fetch data for:", dev_sd, file=sys.stderr)
 
                 continue
 
@@ -788,17 +897,6 @@ def check_storage_sd() -> None:
             send_short(device_topic + "/" + config['updated_topic'], dates_json)
 
 
-# end loop: for device in os.listdir( "/dev" ):
-
-########################################
-def check_storage() -> None:
-    """
-    Calls all lower level functions that checks various properties of hardware and software
-    :return: None
-    """
-    check_storage_sd()  # do low-level first
-
-
 ####################################################
 def set_config_default(key: str, val) -> None:
     """
@@ -834,8 +932,8 @@ def_config_file = def_config_path + "/mqtt-storage.ini"
 ####################################################
 
 parser = argparse.ArgumentParser(
-    description="Collect state info from the storage and post it to mqtt.\n"
-                "V2.011. Copyright (c) 2022+ by Andrej Pakhutin")
+    description="Collect state info from the storage devices and post it to mqtt.\n"
+                "V2.1. Copyright (c) 2022+ by Andrej Pakhutin")
 parser.add_argument("-c", "--config", dest="config_path", action="store", default=def_config_file,
                     help="path to a non-default config file")
 parser.add_argument("-d", "--debug", dest="debug", action="store_true", default=False, help="debug mode")
@@ -859,7 +957,7 @@ spawn_sender()
 
 queue = []
 mounts = dict()
-devices_cache = dict()
+devices = { 'options': { 'time': 0.0 } }  # last refresh of a list
 
 if args.action != "":
     queue.append(args.action)
@@ -870,6 +968,8 @@ else:
 set_config_default("max_error_nag_hours", 24 * 10)
 set_config_default("max_inactivity", 10 * 60)
 set_config_default("max_tests_age", 7 * 24)
+set_config_default("skip_dev_types", "")
+set_config_default("refresh_dev_list", "1800")
 
 while True:
     dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
@@ -891,7 +991,7 @@ sender.communicate(input="\n\n" + '{ "cmd":"exit" }' + "\n")
 
 try:
     sender.wait(timeout=5.0)
-except:
+except Exception:
     pass
 
 sender.terminate()
