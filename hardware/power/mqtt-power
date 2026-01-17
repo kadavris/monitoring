@@ -138,7 +138,7 @@ def send_message(*msg) -> None:
 
 
 ########################################
-def update_stats(device: str, prefix: str, time_value: int, voltage: float, freq: float) -> None:
+def update_vf_stats(device: str, prefix: str, time_value: int, voltage: float, freq: float) -> None:
     """
     Will update stats[ device ] with per-minute, hourly or daily values depending on a prefix value.
     All keys in form prefix + 'string' must be in sync with outer function for values to be reported successfully
@@ -149,38 +149,42 @@ def update_stats(device: str, prefix: str, time_value: int, voltage: float, freq
     :param freq: float: frequency as reportde by device
     :return: None
     """
-    global Stats
+    global stats_vf
 
-    if Stats[device][prefix + 'start'] != time_value:  # new time period?
+    ds = stats_vf[device]
+    if ds[prefix + 'start'] != time_value:  # new time period?
         # making old mean the 1st value of this period
-        Stats[device][prefix + 'v'] = Stats[device][prefix + '_v_mean'] + voltage
-        Stats[device][prefix + 'f'] = Stats[device][prefix + '_f_mean'] + freq
-        Stats[device][prefix + 'samples'] = 2
-        Stats[device][prefix + 'start'] = time_value
+        ds[prefix + 'samples'] = 1 if ds[prefix + '_v_mean'] > 0 else 0
+        if voltage > 0.0:
+            ds[prefix + 'samples'] += 1
+        ds[prefix + 'v'] = ds[prefix + '_v_mean'] + int(voltage)
+        ds[prefix + 'f'] = ds[prefix + '_f_mean'] + int(freq)
+        ds[prefix + 'start'] = time_value
 
         if prefix == 'd':  # reset blackouts info. Later we may switch to 'last 24 hours'
-            Stats[device]['bo_time'] = 0
-            Stats[device]['blackouts'] = 0
-            Stats[device]['in_bo'] = False
+            ds['bo_time'] = 0
+            ds['blackouts'] = 0
+            ds['in_bo'] = False
     else:  # same period
         if voltage > 0.0:  # don't account for blackouts from russian cultural bombings.
-            Stats[device][prefix + 'samples'] += 1
-            Stats[device][prefix + 'v'] += voltage
-            Stats[device][prefix + 'f'] += freq
+            ds[prefix + 'samples'] += 1
+            ds[prefix + 'v'] += voltage
+            ds[prefix + 'f'] += freq
 
+    # Managing blackouts info
     if voltage > 0.0:
-        Stats[device]['in_bo'] = False
+        ds['in_bo'] = False
     else:
         if prefix == 'd':  # update blackouts once per m/h/d calls series
-            Stats[device]['bo_time'] += int(CONFIG['sample_interval'])
-            if not Stats[device]['in_bo']:
-                Stats[device]['blackouts'] += 1
-                Stats[device]['in_bo'] = True
+            ds['bo_time'] += int(CONFIG['sample_interval'])
+            if not ds['in_bo']:
+                ds['blackouts'] += 1
+                ds['in_bo'] = True
 
-    Stats[device][prefix + '_v_mean'] = \
-        Stats[device][prefix + 'v'] // Stats[device][prefix + 'samples']
-    Stats[device][prefix + '_f_mean'] = \
-        Stats[device][prefix + 'f'] // Stats[device][prefix + 'samples']
+    # updating mean values
+    if ds[prefix + 'samples'] != 0:
+        ds[prefix + '_v_mean'] = ds[prefix + 'v'] // ds[prefix + 'samples']
+        ds[prefix + '_f_mean'] = ds[prefix + 'f'] // ds[prefix + 'samples']
 
 
 ########################################
@@ -212,7 +216,7 @@ def get_upsc_output(device: str) -> dict:
     :param device:
     :return: dict("model":"manufacturer model", "data":dict(attribute:val))
     """
-    global ARGS, CONFIG, Stats
+    global ARGS, CONFIG, stats_vf
 
     to_return = {"model": "", "errors": "",
                  "data": {},  # attributes values will be here
@@ -284,32 +288,32 @@ def get_upsc_output(device: str) -> dict:
             f = float(to_return['data']['output_frequency']) \
                 if 'output_frequency' in to_return['data'] else 0.0
 
-        if device not in Stats:  # init
-            Stats[device] = {
+        if device not in stats_vf:  # init
+            stats_vf[device] = {
                 'blackouts': 0, 'bo_time': 0, 'in_bo': False,
-                'mstart': 0, 'm_v_mean': v, 'mv': v,  # minute
-                'mf': f, 'm_f_mean': f, 'msamples': 1,
-                'hstart': 0, 'h_v_mean': v, 'hv': v,  # hour
-                'hf': f, 'h_f_mean': f, 'hsamples': 1,
-                'dstart': 0, 'd_v_mean': v, 'dv': v,  # day
-                'df': f, 'd_f_mean': f, 'dsamples': 1
+                'mstart': 0, 'm_v_mean': 0, 'mv': 0.0,  # minute
+                'mf': 0, 'm_f_mean': 0, 'msamples': 0,
+                'hstart': 0, 'h_v_mean': 0, 'hv': 0.0,  # hour
+                'hf': 0, 'h_f_mean': 0, 'hsamples': 0,
+                'dstart': 0, 'd_v_mean': 0, 'dv': 0.0,  # day
+                'df': 0, 'd_f_mean': 0, 'dsamples': 0
             }
 
-        update_stats(device, 'm', t.tm_min, v, f)
-        update_stats(device, 'h', t.tm_hour, v, f)
-        update_stats(device, 'd', t.tm_mday, v, f)
+        update_vf_stats(device, 'm', t.tm_min, v, f)
+        update_vf_stats(device, 'h', t.tm_hour, v, f)
+        update_vf_stats(device, 'd', t.tm_mday, v, f)
 
-        to_return['data']['voltage_mean_minute'] = Stats[device]['m_v_mean']
-        to_return['data']['frequency_mean_minute'] = Stats[device]['m_f_mean']
+        to_return['data']['voltage_mean_minute'] = stats_vf[device]['m_v_mean']
+        to_return['data']['frequency_mean_minute'] = stats_vf[device]['m_f_mean']
 
-        to_return['data']['voltage_mean_hour'] = Stats[device]['h_v_mean']
-        to_return['data']['frequency_mean_hour'] = Stats[device]['h_f_mean']
+        to_return['data']['voltage_mean_hour'] = stats_vf[device]['h_v_mean']
+        to_return['data']['frequency_mean_hour'] = stats_vf[device]['h_f_mean']
 
-        to_return['data']['voltage_mean_day'] = Stats[device]['d_v_mean']
-        to_return['data']['frequency_mean_day'] = Stats[device]['d_f_mean']
+        to_return['data']['voltage_mean_day'] = stats_vf[device]['d_v_mean']
+        to_return['data']['frequency_mean_day'] = stats_vf[device]['d_f_mean']
 
-        to_return['data']['blackouts'] = Stats[device]['blackouts']
-        to_return['data']['time_in_blackouts'] = Stats[device]['bo_time']
+        to_return['data']['blackouts'] = stats_vf[device]['blackouts']
+        to_return['data']['time_in_blackouts'] = stats_vf[device]['bo_time']
     except Exception:
         pass
 
@@ -337,7 +341,7 @@ def check_nut() -> None:
     Default function to run on invocation of this script.
     :return: None
     """
-    global ARGS, CONFIG, Log_items, Sender, Stats
+    global ARGS, CONFIG, Log_items, Sender, stats_vf
 
     if 'devices' in CONFIG:
         dev_list = CONFIG['devices'].split()
@@ -405,10 +409,10 @@ def check_nut() -> None:
         # is it time to post new data?
         next_rep = device + '_next_report'
 
-        if (next_rep in Stats) and Stats[next_rep] > time.time():  # too soon to report?
+        if (next_rep in stats_vf) and stats_vf[next_rep] > time.time():  # too soon to report?
             continue
 
-        Stats[next_rep] = time.time() + float(CONFIG['report_interval'])
+        stats_vf[next_rep] = time.time() + float(CONFIG['report_interval'])
 
         # quick post one-to-one data
         if 'one_to_one' in CONFIG:
@@ -419,8 +423,11 @@ def check_nut() -> None:
                 if oto_attr in upsc_data['data']:
                     msg = upsc_data['data'][oto_attr]
                 else:
-                    msg = 'NO DATA'
-                    checks_with_errors += 1
+                    if oto_attr in ['ups_alarm']:
+                        msg = 'OK'
+                    else:
+                        msg = 'NO DATA'
+                        checks_with_errors += 1
 
                 send_message('{ "publish":"', msg, '", "retain":true, "topics":[ "',
                              dev_topic, '/', oto_topic, '" ] }\n')
@@ -495,7 +502,7 @@ if ARGS.debug:
 
 Dates_json = ''
 queue = []
-Stats = {}
+stats_vf = {}
 
 # pre-caching the list of items to put in the log
 Log_items: list[str] = []
