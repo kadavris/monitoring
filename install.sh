@@ -8,13 +8,27 @@ ETC="/etc/smarthome/monitoring"
 
 USER="smarthome"
 GROUP="smarthome"
+/usr/bin/id "$USER" 2> /dev/null
+if [ $? == 1 ]; then
+    if [ -d "$ETC" ]; then
+        USER=`/usr/bin/stat --printf %U "$ETC"`
+        GROUP=`/usr/bin/stat --printf %G "$ETC"`
+        echo I see that you use $USER:$GROUP credentials. Will obey.
+    else
+        echo ERROR! Cannot determine what UID/GID to use.
+        echo You may want to add these by running:
+        echo useradd -d \"$ETC\" -s /sbin/nologin -g $GROUP $USER
+        exit 1
+    fi
+fi
 
 OWNER="--owner=${USER} --group=${GROUP}"
+
 EXEOPT="-D ${OWNER} --mode=0755"
 SVCOPT="${OWNER} --mode=0644"
 INIOPT="-D ${OWNER} --mode=0640"
 
-INST="/bin/install"
+INST="/usr/bin/install"
 
 # in: <src file> <dst dir> <new name or ''> <install params>
 function install_to_dir_w_check() {
@@ -24,6 +38,7 @@ function install_to_dir_w_check() {
     [ "$nn" == "" ] && nn=$(basename "$src")
     nn="${ddir}/${nn}"
 
+    # only if new file is newer we will copy it as .ini.sample for suggestions
     if [ "$src" -nt "$nn" ]; then
         [ -e "$nn" ] && nn="${nn}.new"
         echo "+ Will install $src ==> $nn"
@@ -61,13 +76,13 @@ function install_storage() {
 if [ "$1" == "" ]; then
     echo Use \'install.sh all\' to process all of the files
     echo Or specify \'mikrotik\' or \'power\' or \'storage\' to install specific ones
+    echo NOTE: This script will not overwrite existing .ini files.
     exit 0
 fi
 
 if [ ! -d "$ETC" ]; then
-    mkdir -p "$ETC"
-    chown "$USER:$GROUP" "$ETC"
-    chmod ug+rwx "$ETC"
+    /usr/bin/mkdir -p -m 0770 "$ETC"
+    /usr/bin/chown "$USER:$GROUP" "$ETC"
 fi
 
 if [ "$1" == "all" ]; then
