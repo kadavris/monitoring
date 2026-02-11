@@ -1,13 +1,14 @@
 [Unit]
 Description=Storage devices health status reporting through MQTT daemon
-After=syslog.target network.target
+After=syslog.target network-online.target
 
 [Service]
 # smartctl will not work if not root
 User=root
 Group=smarthome
-ExecStart=/usr/local/lib/kadavris/monitoring/mqtt-storage-sd-reports --loop 60 --config=/etc/smarthome/monitoring/storage/mqtt-storage.ini
-WorkingDirectory=/etc/smarthome/monitoring/storage
+WorkingDirectory=/etc/smarthome/monitoring
+EnvironmentFile="/etc/smarthome/monitoring/service-env"
+ExecStart="$BINDIR/mqtt-storage-sd-reports" --loop 60 --config="$CONFDIR/mqtt-storage.ini"
 Restart=on-failure
 RestartSec=5
 

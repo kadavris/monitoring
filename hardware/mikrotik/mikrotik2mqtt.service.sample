@@ -1,6 +1,6 @@
 [Unit]
 Description=MikroTik router data to MQTT daemon
-After=network.target
+After=network-online.target
 
 [Service]
 User=smarthome

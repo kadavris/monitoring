@@ -1,0 +1,12 @@
+# This file should be placed into a working directory
+# from where it will be included by the EnvironmentFile directivce of .service modules
+# Also it is used by the install.sh script for a destination directories values
+
+# PYTHONPATH: Where our custom modules are
+export PYTHONPATH="/usr/local/lib/kadavris"
+
+# Where confif files are placed
+export CONFDIR="/etc/smarthome/monitoring"
+
+# Where main executables are
+export BINDIR="/usr/local/bin"

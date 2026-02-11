@@ -1,12 +1,14 @@
 [Unit]
 Description=Power status to MQTT daemon
-After=network.target nut-server.service
+After=network-online.target nut-server.service
 
 [Service]
+# You need to have exec rights for upsc
 User=nut
 Group=smarthome
-ExecStart=/usr/local/lib/kadavris/monitoring/mqtt-power --loop 20 --config=/etc/smarthome/monitoring/power/mqtt-power.ini
-WorkingDirectory=/etc/smarthome/monitoring/power
+WorkingDirectory=/etc/smarthome/monitoring
+EnvironmentFile="/etc/smarthome/monitoring/service-env"
+ExecStart="$BINDIR/mqtt-power" --loop 30 --config="$CONFDIR/mqtt-power.ini"
 Restart=on-failure
 RestartSec=5
 
