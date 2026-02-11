@@ -2,4 +2,5 @@
 .vscode
 .tmp
 .old
+__pycache__/
 2do.txt
