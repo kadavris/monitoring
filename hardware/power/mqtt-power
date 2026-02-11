@@ -6,27 +6,36 @@
      power
          <dev_id> - {"model":"...", "errors":"...", "attribute1":"..."...}
             state_topic... - one-line state message
-            updated - json: { "date":"human-readable date", timestamp:UNIXTS }
+            updated - JSON: { "date":"human-readable date", timestamp:UNIXTS }
 """
 import argparse
 import configparser
+from configparser import ConfigParser, SectionProxy
 import os
 import os.path
 import re
 import signal
 import socket
 import sys
-import shlex
 import subprocess
 import time
+from kadpy.kbattlead import KBattLead
+from kadpy.kmqtt import KMQTT
 
+# globals and prototypes to shut IDE up
+DEFAULT_CONFIG_PATH = '/etc/smarthome/monitoring/power/'
+DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_PATH + 'mqtt-power.ini'
+GLOBAL_CONFIG: ConfigParser = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
+CONFIG: SectionProxy
+Sender: KMQTT
+DEVICES: dict = {} # will hold device's current data for continuous processing and statistics
 
 #############################################################
 def handle_termination(signum, frame) -> None:
     """
     Will (safely) handle termination. Stopping sender agent on its rails.
     :param signum: NOT USED
-    :param frame: NOT USED
+    :param frame: ALSO NOT USED
     :return: None
     """
     if ARGS.debug:
@@ -35,6 +44,7 @@ def handle_termination(signum, frame) -> None:
     if Sender:
         Sender.terminate()
 
+    # todo: close logs and stats
     sys.exit(0)
 
 
@@ -43,98 +53,28 @@ def load_config(c_file: str):
     """
     Will load configuration file, checking for problems beforehand
     :param c_file: path to config file
-    :return: None
+    :return: parsed config section object
     """
-    global ARGS, CONFIG, GLOBAL_CONFIG
+    global ARGS, GLOBAL_CONFIG
 
     file = c_file
 
     if not os.path.exists(file):
-        if re.search(r'/', file):
+        if '/' in file:
             print("! Can't open config: ", file, file=sys.stderr)
             sys.exit(1)
 
-        file = os.path.dirname(sys.argv[0]) + '/' + c_file
-
-        if not os.path.exists(file):
-            file = '/etc/smarthome/reporters/' + c_file
+        file = DEFAULT_CONFIG_PATH + c_file
 
     if ARGS.debug:
         print("+ Loading config:", file)
 
-    GLOBAL_CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
     GLOBAL_CONFIG.read(file)
-    return GLOBAL_CONFIG['power']
+    if GLOBAL_CONFIG.has_section('power'):
+        return GLOBAL_CONFIG['power']
 
-
-########################################
-def spawn_sender() -> None:
-    """
-    Will spawn sender process, checking for various problems
-    :return: None
-    """
-    global ARGS, CONFIG, Sender
-
-    if ARGS.debug:
-        print("+ Spawning sender process:", CONFIG['sender'], file=sys.stderr)
-
-    # default bufsize may gobble a whole loop of data and do nothing till the next
-    Sender = subprocess.Popen(shlex.split(CONFIG['sender']), bufsize=1,
-                              stdin=subprocess.PIPE,
-                              stdout=(None if ARGS.debug or CONFIG['sender'].find('--debug')
-                                      else subprocess.DEVNULL),
-                              stderr=(None if ARGS.debug or CONFIG['sender'].find('--debug')
-                                      else subprocess.DEVNULL),
-                              text=True)
-
-    if not Sender:
-        print('? ERROR running ', CONFIG['sender'], file=sys.stderr)
-        sys.exit(1)
-
-    if Sender.poll():  # poll() return None if process is still there
-        print('? ERROR with running ', Sender.args, ": exited ",
-              ("abnormally" if Sender.returncode > 0 else "W/O error"),
-              "with rc:", Sender.returncode, file=sys.stderr)
-        sys.exit(1)
-
-
-########################################
-def send_message(*msg) -> None:
-    """
-    Will send new message to the MQTT using sender process connection
-    :param msg: list of message parts to send
-    :return: None
-    """
-    global ARGS, Sender
-
-    try_number = 1
-    while True:
-        if Sender.poll():  # check if it is still alive (not None)
-            spawn_sender()
-
-        try:
-            if ARGS.debug:
-                print('> Send: ', msg)
-
-            Sender.stdin.write(''.join(msg))
-        except Exception:
-            if ARGS.debug:
-                exc_type, exc_val, traceback = sys.exc_info()
-                if exc_val:
-                    exc_val = ','.join(exc_val.args)
-                else:
-                    exc_val = 'UNKNOWN REASON'
-                print("! Sending failed (", exc_val, ")", file=sys.stderr)
-
-            try_number += 1
-            if try_number > 3:
-                try_number = 1
-                print("!!! Respawning.", file=sys.stderr)
-                spawn_sender()
-        else:
-            break
-
-        time.sleep(3.0)
+    print("! 'No 'power' section found in config file:", file, file=sys.stderr)
+    sys.exit(1)
 
 
 ########################################
@@ -203,20 +143,20 @@ def get_model_specific_config(device: str, keyword: str, default: str = "") -> s
             and keyword in GLOBAL_CONFIG[specific_section]:
         return GLOBAL_CONFIG[specific_section][keyword]
 
-    if keyword in CONFIG:
+    if keyword in CONFIG:  # check if config has default of its own
         return CONFIG[keyword]
 
     return default
 
 
 ########################################
-def get_upsc_output(device: str) -> dict:
+def get_data_from_upsc(device: str) -> dict:
     """
     Collects data from upsc output for given device.
     :param device:
     :return: dict("model":"manufacturer model", "data":dict(attribute:val))
     """
-    global ARGS, CONFIG, stats_vf
+    global ARGS, CONFIG, DEVICES, stats_vf
 
     to_return = {"model": "", "errors": "",
                  "data": {},  # attributes values will be here
@@ -230,14 +170,15 @@ def get_upsc_output(device: str) -> dict:
         'ups_status',  # ups.status: OL
     ]
 
+    dev_data = DEVICES[device]
     # adding user-defined properties
     if 'one_to_one' in CONFIG:
         for pair in CONFIG.get('one_to_one').split():
             oto_attr, oto_topic = pair.split(':')
             upsc_data_needed.append(oto_attr)
 
-    if 'bulk_report' in CONFIG:
-        to_return['bulk_report'] = CONFIG.get('bulk_report').split()
+    if 'bulk_report' in dev_data:
+        to_return['bulk_report'] = dev_data['bulk_report']
         upsc_data_needed += to_return['bulk_report']
 
     to_return['need'] = upsc_data_needed  # indicating what we intended to collect here
@@ -318,12 +259,11 @@ def get_upsc_output(device: str) -> dict:
         pass
 
     # fill in specials:
-    to_return['model'] = "Model: "
     # device.mfr: EATON. Some UPS report empty string here
     if 'device_mfr' in to_return['data'] and to_return['data']['device_mfr'] != "":
-        to_return['model'] += to_return['data']['device_mfr']
+        to_return['model'] = to_return['data']['device_mfr']
     else:
-        to_return['model'] += get_model_specific_config(device, ".mfr", "UNSPECIFIED")
+        to_return['model'] = get_model_specific_config(device, ".mfr", "UNSPECIFIED MFR")
 
     # device.model: 5E 1500i
     if 'device_model' in to_return['data'] and to_return['data']['device_model']:
@@ -335,32 +275,92 @@ def get_upsc_output(device: str) -> dict:
 
 
 ########################################
-def check_nut() -> None:
+def device_init(device: str) -> bool:
+    """
+    Prepares device data sourced from configuration file.
+    :param device: str: device ID
+    :return: bool: success
+    """
+    global CONFIG, DEVICES, GLOBAL_CONFIG
+    dd = DEVICES[device] = {
+        'dev_id': device,
+        'sample_interval': int(CONFIG['sample_interval']),
+    }
+
+    csect_name = 'power.' + device
+    if csect_name in GLOBAL_CONFIG:
+        csect = GLOBAL_CONFIG[csect_name]
+    else:
+        csect = {}
+
+    problems = []  # will hold an itemized list of any problems encountered
+    binfo = csect['battery'].split(',')  #'battery=<type>,<nominal voltage>,<pack's A/h>'
+    if len(binfo) != 2 or binfo[0].lower() not in ['pb','lifepo'] \
+        or not binfo[1].isdigit() or not binfo[2].isdigit() \
+        or int(binfo[1]) % 12 != 0 or int(binfo[1]) < 12 or int(binfo[2]) < 1:
+         problems.append('Battery definition error')
+    else:
+        dd['batt_type'] = binfo[0]
+        dd['batt_vnom'] = int(binfo[1])
+        dd['batt_cap'] = int(binfo[2])
+
+    if -1 == dd['power_rating'].find(','):
+        pr = dd['power_rating']
+        unit = 'va'
+    else:
+        pr, unit = dd['power_rating'].split(',')
+
+    if not pr.isdigit() or int(pr) < 100 or unit not in ['va', 'w']:
+        problems.append("Invalid power rating def")
+    else:
+        dd['power_rating'] = float(pr)
+        dd['power_rating_unit'] = unit
+
+    if 'load_reported_as' in csect:
+        unit = dd['load_reported_as'].lower()
+    else:
+        unit = 'p'
+
+    if unit[0] not in 'pvw':
+        problems.append("Invalid load_reported_as def")
+    else:
+        dd['load_reported_as'] = unit[0]
+
+    dd['calc_charge_data'] = bool(csect['calc_charge_data']) if 'calc_charge_data' in csect else False
+
+    # list() options that may override common config:
+    for overrides in ['one_to_one', 'bulk_report', 'log_items']:
+        option = get_model_specific_config(device, overrides)
+        if option:
+            dd[overrides] = option.split()
+
+    if problems:
+        print(f'Device {device} has problems: {problems}', file=sys.stderr)
+        return False
+
+    ps = get_model_specific_config(device, 'perma_storage', '')
+    if dd['batt_type'] == 'pb':  # if path is empty, the load/save will silently fail
+        dd['statobj'] = KBattLead(ps, dd)
+
+    return True
+
+
+########################################
+def check_nut() -> bool:
     """
     Will analyze upsc output and send the data to MQTT.
     Default function to run on invocation of this script.
-    :return: None
+    :return: bool - False in case of trouble
     """
-    global ARGS, CONFIG, Log_items, Sender, stats_vf
+    global ARGS, CONFIG, DEVICES, log_items, Sender, stats_vf
 
-    if 'devices' in CONFIG:
-        dev_list = CONFIG['devices'].split()
-    else:
-        if ARGS.debug:
-            print('requesting the list of devices from upsc')
-
-        upsc = subprocess.Popen(['upsc', '-l'],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=(None if ARGS.debug else subprocess.DEVNULL), text=True)
-        dev_list = upsc.communicate()[0].splitlines()
-
-    for device in dev_list:
+    for device in DEVICES:
         dev_topic = CONFIG['device_topic'].replace('$device', device)
 
         if ARGS.debug:
             print('device:', device, 'topic:', dev_topic)
 
-        upsc_data = get_upsc_output(device)
+        upsc_data = get_data_from_upsc(device)
 
         # we will count the configured checks to report if none were enabled actually
         checks_run = 0
@@ -381,15 +381,15 @@ def check_nut() -> None:
                 time_str = time.strftime(r'%Y-%m-%d %H:%M:%S')
 
                 line = ''
-                if len(Log_items) > 0:  # a subset of data requested
-                    for k in Log_items:
+                if len(log_items) > 0:  # a subset of data requested
+                    for k in log_items:
                         if k and k not in upsc_data['data']:
                             line += time_str + ' WARNING! upsc does not provide item "' + k + '"\n'
-                            Log_items[Log_items.index(k)] = None
+                            log_items[log_items.index(k)] = None
 
                     line += time_str + ' { "date":"' + time_str + '"'
 
-                    for k in Log_items:
+                    for k in log_items:
                         if k:
                             line += ', "' + k + '":"' + str(upsc_data['data'][k]) + '"'
 
@@ -429,8 +429,7 @@ def check_nut() -> None:
                         msg = 'NO DATA'
                         checks_with_errors += 1
 
-                send_message('{ "publish":"', msg, '", "retain":true, "topics":[ "',
-                             dev_topic, '/', oto_topic, '" ] }\n')
+                Sender.send_json_short(dev_topic + '/' + oto_topic, msg, retain=True)
 
         # finally sending general status message
         if upsc_data['errors'] != '' or ('ups_status' not in upsc_data['data']):
@@ -440,38 +439,31 @@ def check_nut() -> None:
             msg = upsc_data['data']['ups_status']
         checks_run += 1
 
-        send_message('{ "publish":"', msg, '", "retain":true, "topics":[ "',
-                     dev_topic, '/', CONFIG['state_topic'], '" ] }\n')
+        DEVICES[device]['statobj'].update_stats(upsc_data)
+
+        Sender.send_json_short(dev_topic + '/' + CONFIG['state_topic'], msg, retain=True)
 
         # sending time stats
-        send_message('{ "publish":"', Dates_json, '", "retain":true, "topics":[ "',
-                     dev_topic, '/', CONFIG['updated_topic'], '" ] }\n')
+        Sender.send_json_short(dev_topic + '/' + CONFIG['updated_topic'], Dates_json, retain=True)
 
         # doing bulk report message. we'll use 'mpublish' posting method, so no quoting is needed
-
         stop_word = '25@5h256h256H'
         bulk_msg = bulk_msg[:-1] + ', "checks run":' + str(checks_run) + \
             ', "checks with errors":' + str(checks_with_errors) + ' }'
 
-        send_message('{ "mpublish":"', stop_word, '", "retain":true, "topics":[ "',
-                     dev_topic, '" ] }\n', bulk_msg, stop_word, "\n")
+        Sender.send_json_long(dev_topic, bulk_msg, retain=True, stop_word=stop_word)
 
-
-# end loop: for device in os.listdir( '/dev' ):
+    # end loop: for device in list
+    return True
 
 
 ####################################################
 # MAIN
-global Sender, GLOBAL_CONFIG
-
-
-def_config_path = '/etc/smarthome/monitoring/power/mqtt-power.ini'  # default
-
 parser = argparse.ArgumentParser(
-    description='Collecting power supply info and passing it to mqtt agent. V2.5.1119.'
+    description='Collecting power supply info and passing it to mqtt agent. V2.6.1.'
                 ' Created by Andrej Pakhutin - pakhutin at gmail.'
     )
-parser.add_argument('-c', '--config', dest='config_path', action='store', default=def_config_path,
+parser.add_argument('-c', '--config', dest='config_path', action='store', default=DEFAULT_CONFIG_FILE,
                     help='path to non-default config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
                     help='debug mode')
@@ -492,22 +484,20 @@ signal.signal(signal.SIGTERM, handle_termination)
 hba = socket.gethostbyaddr(socket.gethostname())
 hostname = re.sub(r'\..+', '', hba[0])
 
-spawn_sender()
+Sender = KMQTT(CONFIG['sender'], True, ARGS.debug)
 
 if ARGS.debug:
     if not Sender:
         sys.exit(1)
 
-    print('sender:', Sender.args)
-
-Dates_json = ''
-queue = []
-stats_vf = {}
+Dates_json = ''  # will hold reusable date/timestamp JSON
+queue = []  # action list to run through
+stats_vf = {}  # statistics about voltage and frequency
 
 # pre-caching the list of items to put in the log
-Log_items: list[str] = []
+log_items: list[str] = []
 if 'log_items' in CONFIG:
-    Log_items.extend(CONFIG.get('log_items').split())
+    log_items.extend(CONFIG.get('log_items').split())
 
 ##################################
 # set necessary defaults
@@ -515,13 +505,10 @@ if 'sample_interval' not in CONFIG:
     if ARGS.loop > 0:
         CONFIG['sample_interval'] = str(ARGS.loop)
     else:
-        CONFIG['sample_interval'] = '30'  # seconds
+        CONFIG['sample_interval'] = '60'  # seconds
 
 if 'report_interval' not in CONFIG:
-    if ARGS.loop > 0:
-        CONFIG['report_interval'] = str(ARGS.loop)
-    else:
-        CONFIG['report_interval'] = CONFIG['sample_interval']
+    CONFIG['report_interval'] = CONFIG['sample_interval']
 
 ##################################
 # Which functions should we run. default is check_nut
@@ -530,23 +517,40 @@ if ARGS.action != '':
 else:
     queue = [check_nut]
 
-while True:  # main loop
+problems = False
+# pre-initializing device data for NUT interface
+if 'check_nut' in queue:
+    if 'devices' in CONFIG:
+        dev_list = CONFIG['devices'].split()
+    else:
+        if ARGS.debug:
+            print('requesting the list of devices from upsc')
+
+        upsc = subprocess.Popen(['upsc', '-l'],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=(None if ARGS.debug else subprocess.DEVNULL), text=True)
+        dev_list = upsc.communicate()[0].splitlines()
+
+    for device in dev_list:
+        if not device_init(device):
+            problems = True
+
+while not problems:  # main loop
     Dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
     Dates_json = Dates_json.replace(r'"', r'\"')
 
     for func in queue:
-        func()
+        if not func():
+            problems = True
+            break
+
+    if problems:
+        break
 
     if int(CONFIG['sample_interval']) <= 0:
         break
 
     time.sleep(int(CONFIG['sample_interval']))
 
-try:
-    Sender.communicate(input='\n\n{ "cmd":"exit" }\n')
-
-    Sender.wait(timeout=15.0)
-except Exception:
-    pass
-
+# end of the main loop - finalizing
 Sender.terminate()
