@@ -8,8 +8,10 @@ Most of the tools are bound to produce output to the MQTT topic(s) that you spec
 * **hardware** - Hardware monitoring
   * [**mikrotik**](hardware/mikrotik/README.md) - MikroTik router data to MQTT tool set. Home Assistant helpers provided. 
   * [**power**](hardware/power/README.md) - Power appliances (UPS) monitoring using NUT tools. Many options to report.
-  * [**storage**](hardware/storage/README.md) - Collecting S.M.A.R.T. data using nagios check_ide_smart and smartctl.
+  * [**storage**](hardware/storage/README.md) - Collecting S.M.A.R.T. data preferably by using smartctl from smartmontools.
 
-Majority of these utilities are intended to be used with [mqtt-tools](https://github.com/kadavris/mqtt-tools): MQTT interfacing tools, written in python
+Majority of these utilities are intended to be used with [mqtt-tools](https://github.com/kadavris/mqtt-tools): MQTT interfacing toolset, written in python
+
+Feel free to post issues if any will found.
 
 [This repo on github](https://github.com/kadavris/monitoring)
