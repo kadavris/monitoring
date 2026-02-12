@@ -7,8 +7,8 @@ After=syslog.target network-online.target
 User=root
 Group=smarthome
 WorkingDirectory=/etc/smarthome/monitoring
-EnvironmentFile="/etc/smarthome/monitoring/service-env"
-ExecStart="$BINDIR/mqtt-storage-sd-reports" --loop 60 --config="$CONFDIR/mqtt-storage.ini"
+EnvironmentFile=/etc/smarthome/monitoring/service-env
+ExecStart=/usr/local/bin/mqtt-storage-sd-reports --loop 60 --config=${CONFDIR}/mqtt-storage.ini
 Restart=on-failure
 RestartSec=5
 

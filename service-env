@@ -3,10 +3,10 @@
 # Also it is used by the install.sh script for a destination directories values
 
 # PYTHONPATH: Where our custom modules are
-export PYTHONPATH="/usr/local/lib/kadavris"
+PYTHONPATH="/usr/local/lib/kadavris"
 
-# Where confif files are placed
-export CONFDIR="/etc/smarthome/monitoring"
+# Base, where config files are placed.
+CONFDIR="/etc/smarthome/monitoring"
 
 # Where main executables are
-export BINDIR="/usr/local/bin"
+BINDIR="/usr/local/bin"

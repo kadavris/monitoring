@@ -7,8 +7,8 @@ After=network-online.target nut-server.service
 User=nut
 Group=smarthome
 WorkingDirectory=/etc/smarthome/monitoring
-EnvironmentFile="/etc/smarthome/monitoring/service-env"
-ExecStart="$BINDIR/mqtt-power" --loop 30 --config="$CONFDIR/mqtt-power.ini"
+EnvironmentFile=/etc/smarthome/monitoring/service-env
+ExecStart=/usr/local/bin/mqtt-power" --loop 30 --config=${CONFDIR}/mqtt-power.ini
 Restart=on-failure
 RestartSec=5
 

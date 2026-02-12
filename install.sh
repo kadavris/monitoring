@@ -49,9 +49,10 @@ done
 
 # We'll use BINDIR, CONFDIR and PYTHONPATH from here:
 . $ENVFILE
+export BINDIR CONFDIR PYTHONPATH
 
 # python's import dest
-py_namespace="$PYTHONPATH/kadpy"
+export py_namespace="$PYTHONPATH/kadpy"
 
 # in: <src file> <dst dir> <new name or ''> <install params>
 function install_to_dir_w_check() {
