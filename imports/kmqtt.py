@@ -8,7 +8,6 @@ import select
 import shlex
 import subprocess
 import sys
-import time
 
 
 class KMQTT:
@@ -23,8 +22,9 @@ class KMQTT:
     def __init__(self, cfg_invoke: str, critical: bool=True, debug: bool = False) -> None:
         self._critical: bool = critical
         self._cfg_invoke: str = cfg_invoke
-        self._debug: bool = debug
+        self._debug: bool = debug or self._cfg_invoke.find('--debug')
         self._pipe: subprocess.Popen | None = None
+        self._poller = None  # for systems that understand poll/epoll
 
         self._spawn_sender(True)
 
@@ -41,11 +41,11 @@ class KMQTT:
         if self._debug:
             print("+ Spawning sender process:", self._cfg_invoke, file=sys.stderr)
 
-        sender_output = None if self._debug or self._cfg_invoke.find('--debug') != -1 else subprocess.DEVNULL
         # default bufsize may gobble a whole loop of data and do nothing till the next
-        self._pipe = subprocess.Popen(shlex.split(self._cfg_invoke), bufsize=1,
-                                      stdin=subprocess.PIPE, stdout=sender_output, stderr=sender_output,
-                                      text=True)
+        self._pipe = subprocess.Popen(shlex.split(self._cfg_invoke), bufsize=1, encoding='utf-8',
+                                      # text=True, universal_newlines=True,
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=None if self._debug else subprocess.DEVNULL)
 
         if not self._pipe:
             print('! ERROR running ', self._cfg_invoke, file=sys.stderr)
@@ -59,31 +59,71 @@ class KMQTT:
             if self._critical:
                 sys.exit(1)
 
+        if sys.platform.startswith("linux"):
+            self._poller = select.poll()
+            self._poller.register(self._pipe.stdout.fileno(),
+                                  select.EPOLLIN | select.EPOLLERR | select.EPOLLHUP | select.EPOLLRDHUP)
+
 
     ########################################
     def terminate(self) -> None:
         """Ending the session, despawning sender process"""
         try:
             self._pipe.communicate(input='\n\n{ "cmd":"exit" }\n')
-            self._pipe.wait(timeout=15.0)
-            self._pipe.terminate()
-            self._pipe = None
-        except Exception:
+        except:
             pass
+
+        try:
+            self._pipe.wait(timeout=5.0)
+        except:
+            pass
+
+        try:
+            self._pipe.terminate()
+        except:
+            pass
+
+        self._pipe = None
 
 
     ########################################
     def receive(self) -> str | None:
+        """
+        Tries to receive a message from the sender process
+        :return: None in case of problems or str if answered to
+        """
         if not self._pipe or self._pipe.poll():
             return None
 
         answer = None
-        if self._pipe.stdout \
-            and select.select([self._pipe.stdout], [None], [None], 3)[0][0] > 0:
-                answer = self._pipe.stdout.readline()
+        ready = False
+        if sys.platform.startswith("linux"):
+            evt = self._poller.poll(3000)
+            print(f"poll: evt:{evt}")
+            if len(evt) != 0:
+                print(f"poll: fd:{evt[0][0]}: state: {evt[0][1]}")
+                if evt[0][1] & select.EPOLLIN:
+                    ready = True
+                elif evt[0][1]:  # error conditions
+                    self.terminate()
 
+        elif sys.platform.startswith("cygwin") or sys.platform.startswith("win"):
+            slists = select.select([self._pipe.stdout], [],
+                                   [self._pipe.stdout], 3.0)
+            if len(slists[0]) != 0 and slists[0][0]:
+                ready = True
+
+            elif len(slists[2]) != 0 and slists[2][0] != 0:
                 if self._debug:
-                    print('< Answer:', answer)
+                    print('! pipe error')
+
+                self.terminate()
+
+        if ready:
+            answer = self._pipe.stdout.readline()
+
+            if self._debug:
+                print('< Answer:', answer)
 
         return answer
 
@@ -94,20 +134,18 @@ class KMQTT:
             return None
 
         try_count = 0
-        while True:
+        while try_count <= 3:
             try_count += 1
 
             answer = self.receive()
             if answer and -1 != answer.find('"rc":'):
                 return answer
 
-            if try_count < 3:
-                time.sleep(3.0)  # let it process then
-                continue
-
             if self._debug:
-                print(time.localtime(), "!ERROR processing packet", file=sys.stderr)
-                break
+                print("! sender says:", answer, file=sys.stderr)
+
+        if self._debug:
+            print("! ERROR processing RC packet from sender", file=sys.stderr)
 
         return None
 
@@ -127,7 +165,8 @@ class KMQTT:
                     return
 
                 try_number = 1
-                print("!!! Respawning.", file=sys.stderr)
+                if self._debug:
+                    print("! Respawning sender.", file=sys.stderr)
                 self._spawn_sender(True)
 
             if not self._pipe or self._pipe.poll():  # check if it is still alive (not None)
@@ -154,7 +193,7 @@ class KMQTT:
                 j = json.loads(answer)
                 if not "rc" in j:
                     if self._debug:
-                        print("! Got improper answer: ", answer, file=sys.stderr)
+                        print("! Got an improper answer: ", answer, file=sys.stderr)
                     break
 
                 if j["rc"] != 0:
@@ -192,7 +231,7 @@ class KMQTT:
         :param stop_word: str: optional stop word to use as an EOM indicator
         :return: None
         """
-        self._send_prepared(f'{{ "mpublish":"{stop_word}", "retain":{retain},'
+        self._send_prepared(f'{{ "mpublish":"{stop_word}", "retain":{str(retain).lower()},'
                          f' "topics":["{topic}"] }}\n' + ''.join(msg) + stop_word)
 
 
@@ -205,5 +244,6 @@ class KMQTT:
         :param retain: bool: MQTT retain flag
         :return:
         """
-        self.send('{"publish":"', ''.join(msg), f'", "retain":{retain}, "topics":["{topic}"]}}')
+        self.send('{"publish":"', ''.join(msg),
+                        f'", "retain":{str(retain).lower()}, "topics":["{topic}"]}}')
 
