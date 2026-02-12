@@ -19,11 +19,12 @@ import socket
 import sys
 import subprocess
 import time
+from kadpy.kbattstats import KBattStats
 from kadpy.kbattlead import KBattLead
 from kadpy.kmqtt import KMQTT
 
 # globals and prototypes to shut IDE up
-DEFAULT_CONFIG_PATH = '/etc/smarthome/monitoring/power/'
+DEFAULT_CONFIG_PATH = '/etc/smarthome/monitoring/'
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_PATH + 'mqtt-power.ini'
 GLOBAL_CONFIG: ConfigParser = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
 CONFIG: SectionProxy
@@ -294,30 +295,39 @@ def device_init(device: str) -> bool:
         csect = {}
 
     problems = []  # will hold an itemized list of any problems encountered
-    binfo = csect['battery'].split(',')  #'battery=<type>,<nominal voltage>,<pack's A/h>'
-    if len(binfo) != 2 or binfo[0].lower() not in ['pb','lifepo'] \
-        or not binfo[1].isdigit() or not binfo[2].isdigit() \
-        or int(binfo[1]) % 12 != 0 or int(binfo[1]) < 12 or int(binfo[2]) < 1:
-         problems.append('Battery definition error')
+    if 'battery' in csect:
+        binfo = csect['battery'].split(',')  #'battery=<type>,<nominal voltage>,<pack's A/h>'
+        if len(binfo) != 3 or binfo[0].lower() not in ['pb','lifepo'] \
+            or not binfo[1].isdigit() or not binfo[2].isdigit() \
+            or int(binfo[1]) % 12 != 0 or int(binfo[1]) < 12 or int(binfo[2]) < 1:
+             problems.append('Battery definition error')
+        else:
+            dd['batt_type'] = binfo[0]
+            dd['batt_vnom'] = int(binfo[1])
+            dd['batt_cap'] = int(binfo[2])
     else:
-        dd['batt_type'] = binfo[0]
-        dd['batt_vnom'] = int(binfo[1])
-        dd['batt_cap'] = int(binfo[2])
+        dd['batt_type'] = 'UNDEFINED'
+        dd['batt_vnom'] = -1
+        dd['batt_cap'] = -1
 
-    if -1 == dd['power_rating'].find(','):
-        pr = dd['power_rating']
-        unit = 'va'
-    else:
-        pr, unit = dd['power_rating'].split(',')
+    if 'power_rating' in csect:
+        if -1 == csect['power_rating'].find(','):
+            pr = csect['power_rating']
+            unit = 'va'
+        else:
+            pr, unit = csect['power_rating'].split(',')
 
-    if not pr.isdigit() or int(pr) < 100 or unit not in ['va', 'w']:
-        problems.append("Invalid power rating def")
+        if not pr.isdigit() or int(pr) < 100 or unit not in ['va', 'w']:
+            problems.append("Invalid power rating def")
+        else:
+            dd['power_rating'] = float(pr)
+            dd['power_rating_unit'] = unit
     else:
-        dd['power_rating'] = float(pr)
-        dd['power_rating_unit'] = unit
+        dd['power_rating'] = -1
+        dd['power_rating_unit'] = 'UNKNOWN'
 
     if 'load_reported_as' in csect:
-        unit = dd['load_reported_as'].lower()
+        unit = csect['load_reported_as'].lower()
     else:
         unit = 'p'
 
@@ -341,6 +351,11 @@ def device_init(device: str) -> bool:
     ps = get_model_specific_config(device, 'perma_storage', '')
     if dd['batt_type'] == 'pb':  # if path is empty, the load/save will silently fail
         dd['statobj'] = KBattLead(ps, dd)
+    else:
+        dd['statobj'] = KBattStats(ps, dd)
+
+    if ARGS.debug:
+        print(f'+ Device {device} initilized')
 
     return True
 
@@ -439,7 +454,11 @@ def check_nut() -> bool:
             msg = upsc_data['data']['ups_status']
         checks_run += 1
 
-        DEVICES[device]['statobj'].update_stats(upsc_data)
+        dd = DEVICES[device]
+        dd['statobj'].update_stats(upsc_data)
+        if 'stats_saved' not in dd or dd['stats_saved'] + 600.0 < time.time():
+            dd['statobj'].file_save()
+            dd['stats_saved'] = time.time()
 
         Sender.send_json_short(dev_topic + '/' + CONFIG['state_topic'], msg, retain=True)
 
@@ -519,7 +538,7 @@ else:
 
 problems = False
 # pre-initializing device data for NUT interface
-if 'check_nut' in queue:
+if check_nut in queue:
     if 'devices' in CONFIG:
         dev_list = CONFIG['devices'].split()
     else:
@@ -551,6 +570,9 @@ while not problems:  # main loop
         break
 
     time.sleep(int(CONFIG['sample_interval']))
+
+if problems:
+    print("! Exitting due to critical problems")
 
 # end of the main loop - finalizing
 Sender.terminate()
