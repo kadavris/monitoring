@@ -22,7 +22,7 @@ class KMQTT:
     def __init__(self, cfg_invoke: str, critical: bool=True, debug: bool = False) -> None:
         self._critical: bool = critical
         self._cfg_invoke: str = cfg_invoke
-        self._debug: bool = debug or self._cfg_invoke.find('--debug')
+        self._debug: bool = debug or -1 != self._cfg_invoke.find('--debug')
         self._pipe: subprocess.Popen | None = None
         self._poller = None  # for systems that understand poll/epoll
 
@@ -99,9 +99,7 @@ class KMQTT:
         ready = False
         if sys.platform.startswith("linux"):
             evt = self._poller.poll(3000)
-            print(f"poll: evt:{evt}")
             if len(evt) != 0:
-                print(f"poll: fd:{evt[0][0]}: state: {evt[0][1]}")
                 if evt[0][1] & select.EPOLLIN:
                     ready = True
                 elif evt[0][1]:  # error conditions
@@ -196,7 +194,7 @@ class KMQTT:
                         print("! Got an improper answer: ", answer, file=sys.stderr)
                     break
 
-                if j["rc"] != 0:
+                if int(j["rc"]) != 0:
                     if self._debug:
                         print("! Got RC:", j['rc'], "->", j['message'], file=sys.stderr)
 

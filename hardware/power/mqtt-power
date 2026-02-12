@@ -456,9 +456,11 @@ def check_nut() -> bool:
 
         dd = DEVICES[device]
         dd['statobj'].update_stats(upsc_data)
-        if 'stats_saved' not in dd or dd['stats_saved'] + 600.0 < time.time():
-            dd['statobj'].file_save()
-            dd['stats_saved'] = time.time()
+        if 'stats_save' not in dd or dd['stats_save'] < time.time():
+            if dd['statobj'].file_save():
+                dd['stats_save'] = time.time() + 600.0
+            else:
+                dd['stats_save'] = time.time() + 3600.0  # in case of errors, postpone next save
 
         Sender.send_json_short(dev_topic + '/' + CONFIG['state_topic'], msg, retain=True)
 
