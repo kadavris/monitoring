@@ -151,6 +151,91 @@ def get_model_specific_config(device: str, keyword: str, default: str = "") -> s
 
 
 ########################################
+def device_init(device: str) -> bool:
+    """
+    Prepares device data sourced from configuration file.
+    :param device: str: device ID
+    :return: bool: success
+    """
+    global CONFIG, DEVICES, GLOBAL_CONFIG
+    dd = DEVICES[device] = {
+        'dev_id': device,
+        'sample_interval': int(CONFIG['sample_interval']),
+    }
+
+    csect_name = 'power.' + device
+    if csect_name in GLOBAL_CONFIG:
+        csect = GLOBAL_CONFIG[csect_name]
+    else:
+        csect = {}
+
+    problems = []  # will hold an itemized list of any problems encountered
+    if 'battery' in csect:
+        binfo = csect['battery'].split(',')  #'battery=<type>,<nominal voltage>,<pack's A/h>'
+        if len(binfo) != 3 or binfo[0].lower() not in ['pb','lifepo'] \
+            or not binfo[1].isdigit() or not binfo[2].isdigit() \
+            or int(binfo[1]) % 12 != 0 or int(binfo[1]) < 12 or int(binfo[2]) < 1:
+             problems.append('Battery definition error')
+        else:
+            dd['batt_type'] = binfo[0]
+            dd['batt_vnom'] = int(binfo[1])
+            dd['batt_cap'] = int(binfo[2])
+    else:
+        dd['batt_type'] = 'UNDEFINED'
+        dd['batt_vnom'] = -1
+        dd['batt_cap'] = -1
+
+    if 'power_rating' in csect:
+        if -1 == csect['power_rating'].find(','):
+            pr = csect['power_rating']
+            unit = 'va'
+        else:
+            pr, unit = csect['power_rating'].split(',')
+
+        if not pr.isdigit() or int(pr) < 100 or unit not in ['va', 'w']:
+            problems.append("Invalid power rating def")
+        else:
+            dd['power_rating'] = float(pr)
+            dd['power_rating_unit'] = unit
+    else:
+        dd['power_rating'] = -1
+        dd['power_rating_unit'] = 'UNKNOWN'
+
+    if 'load_reported_as' in csect:
+        unit = csect['load_reported_as'].lower()
+    else:
+        unit = 'p'
+
+    if unit[0] not in 'pvw':
+        problems.append("Invalid load_reported_as def")
+    else:
+        dd['load_reported_as'] = unit[0]
+
+    dd['calc_charge_data'] = bool(csect['calc_charge_data']) if 'calc_charge_data' in csect else False
+
+    # list() options that may override common config:
+    for overrides in ['one_to_one', 'bulk_report', 'log_items']:
+        option = get_model_specific_config(device, overrides)
+        if option:
+            dd[overrides] = option.split()
+
+    if problems:
+        print(f'Device {device} has problems: {problems}', file=sys.stderr)
+        return False
+
+    ps = get_model_specific_config(device, 'perma_storage', '')
+    if dd['batt_type'] == 'pb':  # if path is empty, the load/save will silently fail
+        dd['statobj'] = KBattLead(ps, dd)
+    else:
+        dd['statobj'] = KBattStats(ps, dd)
+
+    if ARGS.debug:
+        print(f'+ Device {device} initilized')
+
+    return True
+
+
+########################################
 def get_data_from_upsc(device: str) -> dict:
     """
     Collects data from upsc output for given device.
@@ -276,91 +361,6 @@ def get_data_from_upsc(device: str) -> dict:
 
 
 ########################################
-def device_init(device: str) -> bool:
-    """
-    Prepares device data sourced from configuration file.
-    :param device: str: device ID
-    :return: bool: success
-    """
-    global CONFIG, DEVICES, GLOBAL_CONFIG
-    dd = DEVICES[device] = {
-        'dev_id': device,
-        'sample_interval': int(CONFIG['sample_interval']),
-    }
-
-    csect_name = 'power.' + device
-    if csect_name in GLOBAL_CONFIG:
-        csect = GLOBAL_CONFIG[csect_name]
-    else:
-        csect = {}
-
-    problems = []  # will hold an itemized list of any problems encountered
-    if 'battery' in csect:
-        binfo = csect['battery'].split(',')  #'battery=<type>,<nominal voltage>,<pack's A/h>'
-        if len(binfo) != 3 or binfo[0].lower() not in ['pb','lifepo'] \
-            or not binfo[1].isdigit() or not binfo[2].isdigit() \
-            or int(binfo[1]) % 12 != 0 or int(binfo[1]) < 12 or int(binfo[2]) < 1:
-             problems.append('Battery definition error')
-        else:
-            dd['batt_type'] = binfo[0]
-            dd['batt_vnom'] = int(binfo[1])
-            dd['batt_cap'] = int(binfo[2])
-    else:
-        dd['batt_type'] = 'UNDEFINED'
-        dd['batt_vnom'] = -1
-        dd['batt_cap'] = -1
-
-    if 'power_rating' in csect:
-        if -1 == csect['power_rating'].find(','):
-            pr = csect['power_rating']
-            unit = 'va'
-        else:
-            pr, unit = csect['power_rating'].split(',')
-
-        if not pr.isdigit() or int(pr) < 100 or unit not in ['va', 'w']:
-            problems.append("Invalid power rating def")
-        else:
-            dd['power_rating'] = float(pr)
-            dd['power_rating_unit'] = unit
-    else:
-        dd['power_rating'] = -1
-        dd['power_rating_unit'] = 'UNKNOWN'
-
-    if 'load_reported_as' in csect:
-        unit = csect['load_reported_as'].lower()
-    else:
-        unit = 'p'
-
-    if unit[0] not in 'pvw':
-        problems.append("Invalid load_reported_as def")
-    else:
-        dd['load_reported_as'] = unit[0]
-
-    dd['calc_charge_data'] = bool(csect['calc_charge_data']) if 'calc_charge_data' in csect else False
-
-    # list() options that may override common config:
-    for overrides in ['one_to_one', 'bulk_report', 'log_items']:
-        option = get_model_specific_config(device, overrides)
-        if option:
-            dd[overrides] = option.split()
-
-    if problems:
-        print(f'Device {device} has problems: {problems}', file=sys.stderr)
-        return False
-
-    ps = get_model_specific_config(device, 'perma_storage', '')
-    if dd['batt_type'] == 'pb':  # if path is empty, the load/save will silently fail
-        dd['statobj'] = KBattLead(ps, dd)
-    else:
-        dd['statobj'] = KBattStats(ps, dd)
-
-    if ARGS.debug:
-        print(f'+ Device {device} initilized')
-
-    return True
-
-
-########################################
 def check_nut() -> bool:
     """
     Will analyze upsc output and send the data to MQTT.
@@ -375,17 +375,17 @@ def check_nut() -> bool:
         if ARGS.debug:
             print('device:', device, 'topic:', dev_topic)
 
-        upsc_data = get_data_from_upsc(device)
+        report_on_upsc = get_data_from_upsc(device)
 
         # we will count the configured checks to report if none were enabled actually
         checks_run = 0
         checks_with_errors = 0
 
         # this will be sent last and be updated by other analysis code on the way
-        bulk_msg = '{ "model":"' + upsc_data['model'] + '", "errors":"' + upsc_data["errors"] + '"'
+        bulk_msg = '{ "model":"' + report_on_upsc['model'] + '", "errors":"' + report_on_upsc["errors"] + '"'
 
-        for k in upsc_data['data']:
-            bulk_msg += ', "' + k + '":"' + str(upsc_data['data'][k]) + '"'
+        for k in report_on_upsc['data']:
+            bulk_msg += ', "' + k + '":"' + str(report_on_upsc['data'][k]) + '"'
 
         bulk_msg += ' }'
 
@@ -398,7 +398,7 @@ def check_nut() -> bool:
                 line = ''
                 if len(log_items) > 0:  # a subset of data requested
                     for k in log_items:
-                        if k and k not in upsc_data['data']:
+                        if k and k not in report_on_upsc['data']:
                             line += time_str + ' WARNING! upsc does not provide item "' + k + '"\n'
                             log_items[log_items.index(k)] = None
 
@@ -406,7 +406,7 @@ def check_nut() -> bool:
 
                     for k in log_items:
                         if k:
-                            line += ', "' + k + '":"' + str(upsc_data['data'][k]) + '"'
+                            line += ', "' + k + '":"' + str(report_on_upsc['data'][k]) + '"'
 
                     line += ' }\n'
 
@@ -435,8 +435,8 @@ def check_nut() -> bool:
                 oto_attr, oto_topic = pair.split(':')
                 checks_run += 1
 
-                if oto_attr in upsc_data['data']:
-                    msg = upsc_data['data'][oto_attr]
+                if oto_attr in report_on_upsc['data']:
+                    msg = report_on_upsc['data'][oto_attr]
                 else:
                     if oto_attr in ['ups_alarm']:
                         msg = 'OK'
@@ -447,15 +447,15 @@ def check_nut() -> bool:
                 Sender.send_json_short(dev_topic + '/' + oto_topic, msg, retain=True)
 
         # finally sending general status message
-        if upsc_data['errors'] != '' or ('ups_status' not in upsc_data['data']):
-            msg = upsc_data['errors']
+        if report_on_upsc['errors'] != '' or ('ups_status' not in report_on_upsc['data']):
+            msg = report_on_upsc['errors']
             checks_with_errors += 1
         else:
-            msg = upsc_data['data']['ups_status']
+            msg = report_on_upsc['data']['ups_status']
         checks_run += 1
 
         dd = DEVICES[device]
-        dd['statobj'].update_stats(upsc_data)
+        dd['statobj'].update_stats(report_on_upsc['data'])
         if 'stats_save' not in dd or dd['stats_save'] < time.time():
             if dd['statobj'].file_save():
                 dd['stats_save'] = time.time() + 600.0

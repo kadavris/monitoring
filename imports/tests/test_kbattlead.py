@@ -9,14 +9,12 @@ import shutil
 import tempfile
 import time
 import unittest
-from unittest import mock
+# from unittest import mock
 
-from kbattstats import KBattStats, CHARGE_STEPS, WEEKS_IN_A_YEAR, WEEKS_IN_A_MONTH, \
-    _SECONDS_IN_A_WEEK, _SECONDS_IN_A_MONTH, _SECONDS_IN_YEAR, BT_LEAD
-from kbattlead import KBattLead, _volts_at_charge, _voltage_to_charge, _v_fatal, \
+from imports.kbattstats import CHARGE_STEPS, BT_LEAD, SECTOR_WIDTH
+from imports.kbattlead import KBattLead, _volts_at_charge, _voltage_to_charge, _v_fatal, \
                        _v_float, _v_boost, _CS_NONE, _CS_BOOST, _CS_FLOAT
 
-from imports.kbattstats import SECTOR_WIDTH
 
 # test range
 _test_range = [
@@ -212,6 +210,7 @@ class TestKBattLead(unittest.TestCase):
     ########################################
     def test_update_hourly_load(self):
         """Test of _update_hourly_load(), placing load averages in correct slots"""
+        #todo: move to base!
         dd = copy.deepcopy(self.tpl_dev_data)
         kb = KBattLead(self.tmpdir, dd)
         upsc_data = copy.deepcopy(self.tpl_upsc_data)

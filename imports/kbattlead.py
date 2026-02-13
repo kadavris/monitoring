@@ -67,19 +67,6 @@ class KBattLead(kbattstats.KBattStats):
 
 
     ########################################
-    def _update_hourly_load(self, dd: dict) -> None:
-        """
-        Updates hourly load averages from device data
-        :param dd: dict: device data as supplied by upsc
-        :return: None
-        """
-        hour = time.localtime().tm_hour
-        avg = self._pdata['hourly_load_avg']
-        samp = self._pdata['hourly_load_samples']
-        avg[hour], samp[hour] = kbattstats.update_avg_int(avg[hour], int(dd['ups_load']), samp[hour])
-
-
-    ########################################
     def _get_charge_percent(self, upsc_data: dict, discharging: bool) -> float:
         """
         Based on device's configuration will return batterg charge level as reported by device

@@ -9,6 +9,7 @@ Most of the tools are bound to produce output to the MQTT topic(s) that you spec
   * [**mikrotik**](hardware/mikrotik/README.md) - MikroTik router data to MQTT tool set. Home Assistant helpers provided. 
   * [**power**](hardware/power/README.md) - Power appliances (UPS) monitoring using NUT tools. Many options to report.
   * [**storage**](hardware/storage/README.md) - Collecting S.M.A.R.T. data preferably by using smartctl from smartmontools.
+* **imports** - Custom Python modules for importing
 
 Majority of these utilities are intended to be used with [mqtt-tools](https://github.com/kadavris/mqtt-tools): MQTT interfacing toolset, written in python
 

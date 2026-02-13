@@ -1,11 +1,13 @@
 # mqtt-power: UPS (Uninterruptible Power Supply) monitoring
 Uses [NUT's](https://networkupstools.org) `upsc` command line interface to query UPS status.  
-See [reporters.ini.power_sample]() `[power]` section for configuration options  
+See [mqtt-power.sample.ini]() `[power]` section for configuration options  
+Main purpose is hoeAsistant integration and battery health statistics and divination.
+The former is in progress now.
 
 Files in the package:
 * mqtt-power.service.sample - For running as systemd service
 * [testing]() - So very internal stuff for debugging
-* reporters.ini.power_sample - An .ini file sample
+* mqtt-power.sample.ini - An .ini file sample with detailed options explanation
 * [home-assistant]() - Home Assistant <https://hass.io> integration helpers
 
 Basically it runs upsc in a loop and logs and pushes the data into MQTT.  
@@ -15,10 +17,10 @@ Requires python3, NUT
 ## Slightly longer intro
 
 ### The .ini file
-The default directory for .ini placement is `/etc/smarthome/reporters/`
-and default config name is `/etc/smarthome/reporters/reporters.ini`
+The default directory for .ini placement is `/etc/smarthome/monitoring/`
+and default config name is `/etc/smarthome/monitoring/mqtt-power.ini`
 
-Please look into provided `reporters.ini.power_sample` file for description of the configurable options.  
+Please look into provided sample .ini file for description of the configurable options.  
 This script sees the `[power]` section as its own, so you can use single .ini for all utilities in this monitoring package  
 
 ### Mode of operation and constraints

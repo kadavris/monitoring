@@ -131,6 +131,19 @@ class KBattStats:
 
 
     ########################################
+    def _update_hourly_load(self, ud: dict) -> None:
+        """
+        Updates hourly load averages from device data
+        :param ud: dict: upsc data as supplied by upsc
+        :return: None
+        """
+        hour = time.localtime().tm_hour
+        avg = self._pdata['hourly_load_avg']
+        samp = self._pdata['hourly_load_samples']
+        avg[hour], samp[hour] = update_avg_int(avg[hour], int(ud['ups_load']), samp[hour])
+
+
+    ########################################
     def _weekly_shift(self) -> None:
         """
         Shifts old weekly data to the back of list and adds fresh (zeroes) items for a new week in the front
