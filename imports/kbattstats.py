@@ -6,6 +6,7 @@ for the UPS-type device's battery health.
 import json
 import os
 import time
+from dataclasses import dataclass
 from typing import Any, cast
 
 # time constants for relaxed estimations of a week-based accounting
@@ -15,26 +16,34 @@ _SECONDS_IN_YEAR: int = 31_449_600  # seconds_in_a_week * 52 -> 1 day drift
 WEEKS_IN_A_MONTH: int = 4
 WEEKS_IN_A_YEAR: int = 52
 
-# we'll store and process battery charge states at 5% wide 'sectors' from 0 to 100%
+# we'll store and process battery charge states at 5% wide 'sectors' from 0 to 99.(9)% + 1 for 100%
 # What I see is that upsc battery.voltage always have precision of 0.1V.
 # With the range of Lead-acid voltage of 12.85 - 10.8 == 2.05V, there is no sense to divide it further
 SECTOR_WIDTH: int = 5
-CHARGE_STEPS: int = 100 // SECTOR_WIDTH
+CHARGE_STEPS: int = 100 // SECTOR_WIDTH + 1
 
 BT_LEAD: int = 0
 BT_LIFEPO: int = 1
 
-########################################
-def update_avg_int(avg: int, val: int, samples: int) -> tuple[int, int]:
-    return (avg * samples + val) // (samples + 1), samples + 1
-
-
-def update_avg_float(avg: float, val: float, samples: int) -> tuple[float, int]:
-    return (avg * samples + val) / (samples + 1), samples + 1
+@dataclass
+class BData:
+    """battery data for internal use"""
+    charge: float = 0.0
 
 
 ########################################
-class KBattStats:
+def update_avg_int(old_avg: int, to_add: int, old_samples: int) -> tuple[int, int]:
+    """update and return tuple: (avg, samples) for integer avg value"""
+    return (old_avg * old_samples + to_add) // (old_samples + 1), old_samples + 1
+
+
+def update_avg_float(old_avg: float, to_add: float, old_samples: int) -> tuple[float, int]:
+    """update and return tuple: (avg, samples) for float avg value"""
+    return (old_avg * old_samples + to_add) / (old_samples + 1), old_samples + 1
+
+
+########################################
+class KBattStats():
     def __init__(self, save_path: str, dev_data: dict) -> None:
         """
         KBattStats constructor.
@@ -42,11 +51,12 @@ class KBattStats:
         :param dev_data: dict: device info set from the main module  
         """
         self.invalid = False  # used to indicate that this instance has invalid setup or data
-        self._dev_data: dict = dev_data
         self.dev_id: str = dev_data['dev_id']
+        self._dev_data: dict = dev_data
         self._storage_path: str = save_path
         self._file_name = os.path.join(save_path, 'mqtt-power.' + self.dev_id + '.json')
         self._pdata: dict[str, Any] | None = None  # persistent data that will be saved into a file
+        self._batteries: dict[str, BData] = {}
 
         # initial current states
         self._charge_sector: int = -1  # which charge percentage sector we are in (see CHARGE_STEPS)
@@ -55,33 +65,33 @@ class KBattStats:
         self._load_avg: float = 0.0  # avg load level at this charge level
         self._state_samples: int = 0  # how many times update have been called while in this sector
         self._discharging: bool = False  # is battery discharging?
-        self._blackout: bool = False  # is in blackout? Used for continuity
+        self._in_blackout: bool = False  # is in blackout? Used for continuity
 
         # looking for old data
         saved_stats = None
         if save_path and os.path.exists(self._file_name) and os.path.getsize(self._file_name) > 0:
             try:
-                saved_stats = json.load(open(self._file_name, mode='r', encoding='utf-8'))
+                with open(self._file_name, mode='r', encoding='utf-8') as infile:
+                    saved_stats = json.load(infile)
             except Exception:
                 pass
 
+        # prep a fallback data. Also used to match current config against loaded JSON
         t = int(time.time())
-
         init_data: dict = {
             'dev_id': dev_data['dev_id'],
-            'batt_type': dev_data['batt_type'],
-            'batt_vnom': dev_data['batt_vnom'],
-            'batt_cap': dev_data['batt_cap'],
-
+            'messages': [],  # if we want to save some thoughts for meatbags
             'ts': t,  # current timestamp
             'started': t,  # time this device's self._data began
-            'messages': [],  # if we want to save some thoughts for meatbags
+
+            'ups': {},  # UPS-specific data
+            'batteries': {},  # batteries info. Filled in by subclasses
         }
 
         if saved_stats:
             # validating
             err_prefix = "! ERROR: stats loaded from " + self._file_name + ":"
-            if len(saved_stats['messages']) > 0:  # Oh. That was already broken
+            if 'messages' in saved_stats and len(saved_stats['messages']) > 0:  # Oh. That was already broken
                 self.invalid = True
                 for m in saved_stats['messages']:
                     init_data['messages'].append(err_prefix + "have message: " + m)
@@ -90,12 +100,14 @@ class KBattStats:
                 self.invalid = True
                 init_data['messages'].append(err_prefix + "is from different device ID")
 
-            # checking if battery definition is different
-            if init_data['batt_type'] != saved_stats['batt_type'] \
-                    or init_data['batt_vnom'] != saved_stats['batt_vnom'] \
-                    or init_data['batt_cap'] != saved_stats['batt_cap']:
-                self.invalid = True
-                init_data['messages'].append(err_prefix + "has different battery definition")
+            # check for missing top-level keywords
+            for item in [('batteries', dict), ('dev_id', str), ('started', int), ('ts', int)]:
+                if not item[0] in saved_stats:
+                    self.invalid = True
+                    init_data['messages'].append(err_prefix + f"has no {item[0]} object")
+                elif not isinstance(saved_stats[item[0]], item[1]):
+                    self.invalid = True
+                    init_data['messages'].append(err_prefix + f"keyword {item[0]} is different type")
 
             if self.invalid:  # init with a stub
                 self._pdata = init_data
@@ -105,6 +117,22 @@ class KBattStats:
 
         else:  #  no saved data - performing initial setup
             self._pdata = init_data
+            # normalizing UPS parameters for stats (to Watts)
+            ud = init_data['ups']
+            if dev_data['power_rating'] != -1:
+                if dev_data['power_rating_unit'] == 'va':
+                    ud['power_rating'] = dev_data['power_rating'] * 0.8
+                else:
+                    ud['power_rating'] = dev_data['power_rating']
+
+                if dev_data['load_reported_as'] == 'p':
+                    ud['load_to_w'] = ud['power_rating'] / 100.0
+                elif dev_data['load_reported_as'] == 'w':
+                    ud['load_to_w'] = 1.0
+                else:  # v/a
+                    ud['load_to_w'] = 0.8
+
+            ud['power_factor'] = dev_data['power_factor']
 
             # there will be up to WEEKS_IN_A_YEAR sub-arrays for each of the elements inside 'weekly' key
             # for the last year. we'll initialize only the 1st element for starters
@@ -122,6 +150,7 @@ class KBattStats:
                 'blackouts_count': [],
                 'blackouts_time': [],  # hours
             }
+
             self._weekly_shift()  # add new week items to start with
 
             # We'll use this for more precise prognostic calculations in blackout
@@ -209,7 +238,8 @@ class KBattStats:
                 os.rename(self._file_name, bakfile)
 
             self._pdata['ts'] = int(time.time())
-            json.dump(self._pdata, open(self._file_name, mode='w', encoding='utf-8'))
+            with open(self._file_name, mode='w', encoding='utf-8') as outfile:
+                json.dump(self._pdata, outfile)
             return True
         except Exception as e:
             self._pdata['messages'].append("! ERROR saving statistics: " + str(e))
@@ -232,30 +262,56 @@ class KBattStats:
         :param upsc_data: dict: device's current state
         :return: None
         """
-        if self.invalid:
-            return
 
         w = cast(dict[str, list[list]], self._pdata['weekly'])
 
-        # Managing blackouts info
+        if 'battery_charge' in upsc_data:
+            self.battery_charge = round(float(upsc_data['battery_charge']), 1)
+        else:
+            self.battery_charge = -1.0
+
+            # Managing blackouts info
         if self._discharging:
             # v = upsc_data['input_voltage']
 
-            if not self._blackout:
-                self._blackout = True
+            if not self._in_blackout:
+                self._in_blackout = True
                 w['blackouts_count'][0] += 1
 
             w['blackouts_time'][0] += round(self._dev_data['sample_interval'] / 3600.0, 4)  # counts hours
         else:
-            self._blackout = False
+            self._in_blackout = False
 
 
     ########################################
     def messages(self) -> list[str]:
         """
-        Get a list of messages about this instance state. Usually errors end up in here.
+        Get a list of messages about this instance state. Usually errors ends up there.
         :return: list[str]
         """
         return self._pdata['messages']
 
 
+    ########################################
+    def get_batteries_list(self) -> list[str]:
+        """Returns a list of device-attached battery IDs"""
+        return self._pdata['batteries'].keys()
+
+
+    ########################################
+    def get_battery_health(self, battery_id: str) -> dict:
+        """STUB: overriding member should return battery health information"""
+        return { "cycles": [0,0,0], "status": "This is stub!", "tbf": -1 }
+
+
+    ########################################
+    def get_battery_charge(self, battery_id: str) -> float:
+        """STUB: overriding member should return battery charge information"""
+        return 100.0
+
+
+    ########################################
+    def get_battery_runtime(self) -> tuple[float, float, float]:
+        """STUB: overriding member should return battery runtime information:
+        (to 80%, to 50%, to zero)"""
+        return -1.0, -1.0, -1.0

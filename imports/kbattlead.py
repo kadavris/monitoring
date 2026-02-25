@@ -51,23 +51,63 @@ class KBattLead(kbattstats.KBattStats):
     """
     def __init__(self, save_path: str, dev_data: dict) -> None:
         super().__init__(save_path, dev_data)
-        if self.invalid:
-            return
 
+        err_prefix = "KBattLead ERROR:"
         self.type: int = kbattstats.BT_LEAD
 
-        self._pack_size = self._dev_data['pack_size'] = self._pdata['batt_vnom'] / 12.0
-
         self._calc_charge = bool(dev_data['calc_charge_data']) if 'calc_charge_data' in dev_data else False
+        self._batteries['main'] = kbattstats.BData(100.0)
 
         # these below are for extrapolating voltage on charge to a real charge level
         # when device reports 100% and/or Vbatt > 100% right after going on mains
         self._last_ob_v = -1.0  # last voltage in OB
+        self._last_charge = -1.0  # the charge from the last update.
         self._charge_state = _CS_NONE
+
+        if 'main' in self._pdata['batteries']:  # old file was loaded
+            # checking if battery definition is the same
+            oldbdata = self._pdata['batteries']['main']
+            for item in ['batt_type', 'batt_vnom', 'batt_cap']:
+                if not item in oldbdata:
+                    self.invalid = True
+                    self._pdata['messages'].append(err_prefix + "battery definition missing: " + item)
+                else:
+                    if dev_data[item] != oldbdata[item]:
+                        self.invalid = True
+                        self._pdata['messages'].append(err_prefix + \
+                                                     "has different battery definition in " + item)
+        else:
+            ud = self._pdata['ups']
+            batt_cap_wh = dev_data['batt_cap'] * ud['power_factor'] * dev_data['batt_vnom']
+            self._pdata['batteries']['main'] = {
+                'registered': [int(time.time()), time.asctime()],
+                'batt_type': dev_data['batt_type'],
+                'batt_vnom': dev_data['batt_vnom'],
+                'batt_cap': dev_data['batt_cap'],
+                'batt_cap_wh': batt_cap_wh,
+                'ideal_sector_speed': 3600 * batt_cap_wh / (kbattstats.CHARGE_STEPS - 1),
+                'health': {
+                    'cycles': [0,0,0],
+                    'status': "OK",
+                    'tbf': -1,
+                },
+            }
+
+        self._bdata = self._pdata['batteries']['main']
+        self._pack_size = self._dev_data['pack_size'] = self._bdata['batt_vnom'] / 12.0
+
+        if self.invalid:
+            return
 
 
     ########################################
-    def _get_charge_percent(self, upsc_data: dict, discharging: bool) -> float:
+    def get_battery_charge(self, battery_id: str) -> float:
+        """returns battery charge information"""
+        return self._batteries['main'].charge
+
+
+    ########################################
+    def _determine_charge(self, upsc_data: dict, discharging: bool) -> float:
         """
         Based on device's configuration will return batterg charge level as reported by device
         or calculated by other means
@@ -76,19 +116,22 @@ class KBattLead(kbattstats.KBattStats):
         :return: int: charge level in percents
         """
         if self.invalid:  # make it a visible problem on a dashboard
+            self._batteries['main'].charge = -1.0
             return -1.0
 
         # should we calculate?
         if not self._calc_charge:
             if 'battery_charge' in upsc_data:
-                return round(float(upsc_data['battery_charge']), 1)
+                self._batteries['main'].charge = round(float(upsc_data['battery_charge']), 1)
+                return self._batteries['main'].charge
 
         # Is device lying to us? (probably we need a config option for this calculated item)
         v = float(upsc_data['battery_voltage']) / self._pack_size
 
         if discharging:
             self._charge_state = _CS_NONE
-            return _voltage_to_charge(v)
+            self._batteries['main'].charge = _voltage_to_charge(v)
+            return self._batteries['main'].charge
 
         # before we'll call charge percent calculation, we need to figure out some state for charging
         if self._discharging:  # state change
@@ -104,14 +147,16 @@ class KBattLead(kbattstats.KBattStats):
                 self._charge_state = _CS_BOOST
 
         if self._charge_state == _CS_BOOST:
-            return round((v - _v_fatal) / (_v_boost - _v_fatal) * 100.0, 1)  # using linear scale for simplicity
+            self._batteries['main'].charge = round((v - _v_fatal) / (_v_boost - _v_fatal) * 100.0, 1)  # using linear scale for simplicity
         else:
-            return 100.0
+            self._batteries['main'].charge = 100.0
+
+        return self._batteries['main'].charge
 
 
     ########################################
-    def _init_for_new_sector(self, upsc_data: dict, discharging: bool, load: float, v: float) -> None:
-        charge = self._get_charge_percent(upsc_data, discharging)
+    def _init_for_new_sector(self, upsc_data: dict, discharging: bool, load: float,
+                             v: float, charge: float) -> None:
         self._charge_sector = int(charge / kbattstats.SECTOR_WIDTH)
         self._charge_sector_start = charge
         self._discharging = discharging
@@ -146,12 +191,12 @@ class KBattLead(kbattstats.KBattStats):
         load = float(upsc_data['ups_load'])
         discharging = bool(re.search(r'\bob\b', upsc_data['ups_status'], re.IGNORECASE))
         v = float(upsc_data['battery_voltage']) / self._pack_size
+        charge = self._determine_charge(upsc_data, discharging)
 
         if self._charge_sector == -1:
-            self._init_for_new_sector(upsc_data, discharging, load, v)
+            self._init_for_new_sector(upsc_data, discharging, load, v, charge)
             return
 
-        charge = self._get_charge_percent(upsc_data, discharging)
         charge_sector = int(charge / kbattstats.SECTOR_WIDTH)
         self._last_ob_v = v
 
@@ -162,6 +207,7 @@ class KBattLead(kbattstats.KBattStats):
                 or ( discharging and charge_sector > self._charge_sector )
                 or ( not discharging and charge_sector < self._charge_sector)):
             # let's say it's still the same
+            self._last_charge = charge
             self._time_in_charge_sector += self._dev_data['sample_interval']
             self._load_avg, self._state_samples = kbattstats.update_avg_float(self._load_avg, load,
                                                                               self._state_samples)
@@ -183,7 +229,92 @@ class KBattLead(kbattstats.KBattStats):
             # adding normalized. Week shift will be performed in avg_add if needed
             if self._load_avg > 0.0:
                 self._weekly_avg_add('discharge_speed' if self._discharging else 'charge_speed',
-                             self._time_in_charge_sector / self._load_avg, self._charge_sector)
+                             self._load_avg / self._time_in_charge_sector, self._charge_sector)
 
-        self._init_for_new_sector(upsc_data, discharging, load, v)
+        if not discharging and self._discharging:  # went OB->OL. Adding health stat
+            if self._last_charge >= 80.0:
+                self._bdata['health']['cycles'][0] += 1
+            elif self._last_charge >= 50.0:
+                self._bdata['health']['cycles'][1] += 1
+            else:
+                self._bdata['health']['cycles'][2] += 1
+
+        self._init_for_new_sector(upsc_data, discharging, load, v, charge)
+        self._last_charge = charge
+
+
+    ########################################
+    @override
+    def get_battery_health(self, battery_id: str) -> dict:
+        """Returns battery health information, the battery id is ignored"""
+        bdata = self._bdata
+        bdh = bdata['health']
+
+        if self.invalid:
+            bdh['status'] = "Invalid setup!"
+            return bdh
+
+        if self._dev_data['power_rating'] == -1:
+            bdh['status'] = "No power rating in config"
+            return bdh
+
+        dspeed_avg = 0.0
+        samples = 0
+        # Look at the last month worth of data max, to not spoil average too much
+        for week in range(min(4, len(self._pdata['weekly']['discharge_speed_avg']))):
+            for cs in range(1, kbattstats.CHARGE_STEPS):  # not counting <10% and 100% zones
+                v = self._pdata['weekly']['discharge_speed_avg'][week][cs]
+                if v > 0.0:
+                    dspeed_avg += v
+                    samples += 1
+
+            if samples >= 10:
+                break
+
+        status = []
+        if samples >= 5:  # ensure there are some variety
+            dspeed_avg /= samples
+            wellness = round(dspeed_avg / bdata['ideal_sector_speed'], 2)
+        else:
+            wellness = 1.0
+            # cycles: < nice >, < normal >, < worst >
+            wellness -= bdh['cycles'][0] / 6000.0  # Theoretically 6k is possible in a pampered conditions
+            wellness -= bdh['cycles'][1] / 3000.0  # more or less standard
+            wellness -= bdh['cycles'][2] / 500.0
+
+        if wellness >= 0.8:
+            status.append('OK (>80%)')
+            wellness = 10 * int(10.0 * wellness)
+        else:
+            if wellness >= 0.5:
+                wellness = 10 * int(10.0 * wellness)
+                status.append(f'Aged: {wellness}%')  # don't dive into small denominations
+            else:
+                if wellness < 0.0:
+                    wellness = 0.0
+                else:
+                    wellness = int(100.0 * wellness)
+
+                if wellness >= 20:
+                    status.append(f'Failing: {wellness}%')
+                else:
+                    status.append(f'Trash it')
+
+        bdh['status'] = ', '.join(status)
+        bdh['wellness'] = int(wellness)
+        return bdh
+
+
+    ########################################
+    @override
+    def get_battery_runtime(self) -> tuple[float, float, float]:
+        """Return battery runtime information: (to 80%, to 50%, to zero)"""
+        to80: float = 0.0
+        to50: float = 0.0
+        tozero: float = 0.0
+
+        chlvl = self._batteries['main'].charge
+
+        # todo:
+        return to80, to50, tozero
 

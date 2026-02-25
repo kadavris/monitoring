@@ -44,6 +44,10 @@ class TestKBattLead(unittest.TestCase):
             'batt_vnom': 48,
             'batt_cap': 230,
             'calc_charge_data': True,
+            'power_rating': 2000,
+            'power_rating_unit': 'va',
+            'power_factor': 0.8,
+            'load_reported_as': 'p',
         }
         # TEMPLATE: upsc data
         self.tpl_upsc_data = {
@@ -67,6 +71,10 @@ class TestKBattLead(unittest.TestCase):
 
         self.assertEqual(kb.type, BT_LEAD)
 
+        self.assertIn('main', kb._pdata['batteries'])
+        for key in ['batt_type', 'batt_vnom', 'batt_cap']:
+            self.assertIn(key, kb._pdata['batteries']['main'])
+
 
     ########################################
     def _get_stats_file_name(self, dd: dict) -> str:
@@ -88,12 +96,16 @@ class TestKBattLead(unittest.TestCase):
         # Create a matching file
         saved = {
             'dev_id': self.tpl_dev_data['dev_id'],
-            'batt_type': self.tpl_dev_data['batt_type'],
-            'batt_vnom': self.tpl_dev_data['batt_vnom'],
-            'batt_cap': self.tpl_dev_data['batt_cap'],
             'ts': 1_000_000,
             'started': 1_000_000,
             'messages': [],
+            'batteries': {
+                'main': {
+                    'batt_type': self.tpl_dev_data['batt_type'],
+                    'batt_vnom': self.tpl_dev_data['batt_vnom'],
+                    'batt_cap': self.tpl_dev_data['batt_cap'],
+                }
+            },
             'weekly': {
                 'start_ts': [123],
                 'discharge_speed_avg': [[0.5] * CHARGE_STEPS],
@@ -144,10 +156,10 @@ class TestKBattLead(unittest.TestCase):
         upsc_data['battery_charge'] = '12.345'
         upsc_data['battery_voltage'] = '-1'
 
-        self.assertEqual(kb._get_charge_percent(upsc_data, True), 12.3, 'No calc, rounding')
+        self.assertEqual(kb._determine_charge(upsc_data, True), 12.3, 'No calc, rounding')
 
         upsc_data['battery_charge'] = '12.36'
-        self.assertEqual(kb._get_charge_percent(upsc_data, True), 12.4, 'No calc, rounding')
+        self.assertEqual(kb._determine_charge(upsc_data, True), 12.4, 'No calc, rounding')
 
 
     ########################################
@@ -165,7 +177,7 @@ class TestKBattLead(unittest.TestCase):
 
         for tp in [ (11.15, 4.9), (12.05, 50.0), (13.0, 100.0) ]:
             upsc_data['battery_voltage'] = str(tp[0] * kb._pack_size)
-            self.assertEqual(kb._get_charge_percent(upsc_data, True), tp[1], 'Calculated')
+            self.assertEqual(kb._determine_charge(upsc_data, True), tp[1], 'Calculated')
 
 
     ########################################
@@ -185,50 +197,26 @@ class TestKBattLead(unittest.TestCase):
         kb._last_ob_v = 11.0
         for tp in [ (11.15, 18.1), (12.05, 43.1), (13.0, 69.4) ]:
             upsc_data['battery_voltage'] = str(tp[0] * kb._pack_size)
-            self.assertEqual(kb._get_charge_percent(upsc_data, False), tp[1], 'Calculated-pre-boost')
+            self.assertEqual(kb._determine_charge(upsc_data, False), tp[1], 'Calculated-pre-boost')
             self.assertEqual(kb._charge_state, _CS_BOOST)
 
         kb._last_ob_v = 11.0
         v = 14.0  # _v_boost - 0.1 -> 14.0 == 97%
         upsc_data['battery_voltage'] = str(v * kb._pack_size)
-        self.assertEqual(kb._get_charge_percent(upsc_data, False), _v_to_charge_linear(v), 'Calculated-before-boost')
+        self.assertEqual(kb._determine_charge(upsc_data, False), _v_to_charge_linear(v), 'Calculated-before-boost')
         self.assertEqual(kb._charge_state, _CS_BOOST)
 
         kb._last_ob_v = 14.0
         v = _v_float  # should change to FLOAT/100%
         upsc_data['battery_voltage'] = str(v * kb._pack_size)
-        self.assertEqual(kb._get_charge_percent(upsc_data, False), 100.0, 'Calculated-past-boost')
+        self.assertEqual(kb._determine_charge(upsc_data, False), 100.0, 'Calculated-past-boost')
         self.assertEqual(kb._charge_state, _CS_FLOAT)
 
         kb._last_ob_v = _v_float
         v = _v_float - 0.5  # should change to BOOST
         upsc_data['battery_voltage'] = str(v * kb._pack_size)
-        self.assertAlmostEqual(kb._get_charge_percent(upsc_data, False), _v_to_charge_linear(v), 1, 'Calc-ret-to-pre-boost')
+        self.assertAlmostEqual(kb._determine_charge(upsc_data, False), _v_to_charge_linear(v), 1, 'Calc-ret-to-pre-boost')
         self.assertEqual(kb._charge_state, _CS_BOOST)
-
-
-    ########################################
-    def test_update_hourly_load(self):
-        """Test of _update_hourly_load(), placing load averages in correct slots"""
-        #todo: move to base!
-        dd = copy.deepcopy(self.tpl_dev_data)
-        kb = KBattLead(self.tmpdir, dd)
-        upsc_data = copy.deepcopy(self.tpl_upsc_data)
-        pd = kb._pdata
-        t = time.localtime()
-        if t.tm_min == 59 and t.tm_sec == 59:
-            time.sleep(2)
-
-        hour = time.localtime().tm_hour
-        upsc_data['ups_load'] = '123'
-        kb._update_hourly_load(upsc_data)
-        self.assertEqual(pd['hourly_load_avg'][hour], 123)  # initials are zero
-        self.assertEqual(pd['hourly_load_samples'][hour], 1)
-
-        upsc_data['ups_load'] = '64'
-        kb._update_hourly_load(upsc_data)
-        self.assertEqual(pd['hourly_load_avg'][hour], 93)  # 123, 64
-        self.assertEqual(pd['hourly_load_samples'][hour], 2)
 
 
     ########################################
@@ -241,7 +229,7 @@ class TestKBattLead(unittest.TestCase):
 
         kb._discharging = discharging
         kb._last_ob_v = v  # last voltage we seen OB
-        charge = kb._get_charge_percent(dd, discharging)
+        charge = kb._determine_charge(dd, discharging)
         kb._charge_sector = int(charge / SECTOR_WIDTH)
         kb._charge_sector_start = charge
         return kb
@@ -415,7 +403,7 @@ class TestKBattLead(unittest.TestCase):
         self.assertEqual(w['charge_speed_samples'][0][prev_sector], 0)
 
         self.assertAlmostEqual(w['discharge_speed_avg'][0][prev_sector],
-                         count * dd['sample_interval'] / float(upsc_data['ups_load']), delta=0.1)
+                         float(upsc_data['ups_load']) / (count * dd['sample_interval']), delta=0.1)
         self.assertEqual(w['discharge_speed_samples'][0][prev_sector], 1)
 
 
@@ -480,6 +468,68 @@ class TestKBattLead(unittest.TestCase):
         self.assertTrue(kb._discharging)
         self.assertNotEqual(w['charge_speed_avg'][0][prev_sector], 0.0)
         self.assertNotEqual(w['charge_speed_samples'][0][prev_sector], 0)
+
+
+    ########################################
+    def test_calc_battery_health(self):
+        """Test for calc_battery_health()"""
+
+        # prepare common device data
+        dd = copy.deepcopy(self.tpl_dev_data)
+        dd['power_rating'] = 2000
+        dd['power_rating_unit'] = 'va'
+        dd['power_factor'] = 0.8
+        dd['load_reported_as'] = 'p'
+
+        # 1. Low samples
+        kb = KBattLead(self.tmpdir, dd)
+        bd = kb._pdata['batteries']['main']
+        bd['health']['cycles'] = [150, 100, 50]  # 1-150/6000-100/3000-50/500 == 0.84
+        bdh = kb.get_battery_health('')
+        self.assertIn('OK', bdh['status'])
+
+        bd['health']['cycles'] = [250, 200, 80]  # 1-250/6000-200/3000-80/500 == 0.73
+        bdh = kb.get_battery_health('')
+        self.assertIn('Aged', bdh['status'])
+
+        bd['health']['cycles'] = [500, 500, 150]  # 1-500/6000-500/3000-150/500 == 0.45
+        bdh = kb.get_battery_health('')
+        self.assertIn('Fail', bdh['status'])
+
+        bd['health']['cycles'] = [800, 800, 250]  # 1-800/6000-800/3000-250/500 == 0.1
+        bdh = kb.get_battery_health('')
+        self.assertIn('Trash', bdh['status'])
+
+        # 2. From weekly data
+        kb._weekly_shift()  # +1 week
+        # reset cycles to more relaxed state
+        bd['health']['cycles'] = [300, 200, 10]  # 1-300/6000-200/3000-10/500 == 0.86
+        for week in range(2):
+            # set 0% and 100% slot to a very low value that should be ignored
+            kb._pdata['weekly']['discharge_speed_avg'][week][0] = 1
+            kb._pdata['weekly']['discharge_speed_avg'][week][CHARGE_STEPS - 1] = 1
+            for cs in range(1, CHARGE_STEPS - 1, 2 * (CHARGE_STEPS - 2) // 10):  # fill at least 10 slots
+                kb._pdata['weekly']['discharge_speed_avg'][week][cs] = bd['ideal_sector_speed']
+
+        bdh = kb.get_battery_health('')
+        self.assertIn('OK', bdh['status'])
+
+        # setting speeds to 75%
+        isp = bd['ideal_sector_speed'] // 100
+        for week in range(2):
+            for cs in range(1, CHARGE_STEPS - 1, 2 * (CHARGE_STEPS - 2) // 10):  # fill at least 10 slots
+                kb._pdata['weekly']['discharge_speed_avg'][week][cs] = isp * 75
+
+        bdh = kb.get_battery_health('')
+        self.assertIn('Aged', bdh['status'])
+
+        # setting speeds to 38%
+        for week in range(2):
+            for cs in range(1, CHARGE_STEPS - 1, 2 * (CHARGE_STEPS - 2) // 10):  # fill at least 10 slots
+                kb._pdata['weekly']['discharge_speed_avg'][week][cs] = isp * 38
+
+        bdh = kb.get_battery_health('')
+        self.assertIn('Fail', bdh['status'])
 
 
 if __name__ == '_main_':

@@ -2,6 +2,7 @@
 """
 Unit tests for kbattstats.py
 """
+import copy
 import os
 import json
 import shutil
@@ -10,8 +11,8 @@ import time
 import unittest
 from unittest import mock
 
-import kadpy.kbattstats as kbattstats
-from kadpy.kbattstats import KBattStats, CHARGE_STEPS, WEEKS_IN_A_YEAR
+import imports.kbattstats as kbattstats
+from imports.kbattstats import KBattStats, CHARGE_STEPS, WEEKS_IN_A_YEAR
 
 class TestKBattStats(unittest.TestCase):
     """Test the KBattStats class."""
@@ -20,13 +21,26 @@ class TestKBattStats(unittest.TestCase):
         # Create a temporary directory to act as the save path
         self.tmpdir = tempfile.mkdtemp()
         # Common device data
-        self.dev_data = {
+        self.tpl_dev_data = {
             'dev_id': 'test123',
             'batt_type': 0,
             'batt_vnom': 12,
             'batt_cap': 2000,
+            'calc_charge_data': True,
+            'power_rating': 2000,
+            'power_rating_unit': 'va',
+            'power_factor': 0.8,
+            'load_reported_as': 'p',
+        }
+        # TEMPLATE: upsc data
+        self.tpl_upsc_data = {
+            'battery_charge': '-1',
+            'battery_voltage': '-1.0',
+            'ups_load': '-1',
         }
 
+
+    ################################################
     def tearDown(self):
         # Remove the temporary directory
         shutil.rmtree(self.tmpdir)
@@ -34,9 +48,10 @@ class TestKBattStats(unittest.TestCase):
 
     ################################################
     def _validate_structure(self, kb: KBattStats, weeks_count: int):
-        # Basic sanity checks
-        for key in ['batt_type', 'batt_vnom', 'batt_cap', 'ts', 'started', 'messages',
-                    'weekly', 'hourly_load_avg', 'hourly_load_samples']:
+        # Basic sanity checks:
+        # Top-level and universal keys presence
+        for key in ['batteries', 'hourly_load_avg', 'hourly_load_samples',
+                    'messages', 'started', 'ts', 'weekly', 'ups']:
             self.assertIn(key, kb._pdata)
 
         for key in ['hourly_load_avg', 'hourly_load_samples']:
@@ -73,9 +88,9 @@ class TestKBattStats(unittest.TestCase):
     @mock.patch('time.time', return_value=1_000_000)
     def test_init_without_file_creates_default(self, mock_time):
         """No file exists - constructor should create default data."""
-        kb = KBattStats(self.tmpdir, self.dev_data)
+        kb = KBattStats(self.tmpdir, self.tpl_dev_data)
         self.assertFalse(kb.invalid)
-        self.assertEqual(kb.dev_id, self.dev_data['dev_id'])
+        self.assertEqual(kb.dev_id, self.tpl_dev_data['dev_id'])
         self.assertEqual(kb._pdata['weekly']['start_ts'][0], 1_000_000)
 
         self._validate_structure(kb, 1)
@@ -87,13 +102,17 @@ class TestKBattStats(unittest.TestCase):
         """If a matching file exists it is loaded correctly."""
         # Create a matching file
         saved = {
-            'dev_id': self.dev_data['dev_id'],
-            'batt_type': self.dev_data['batt_type'],
-            'batt_vnom': self.dev_data['batt_vnom'],
-            'batt_cap': self.dev_data['batt_cap'],
+            'dev_id': self.tpl_dev_data['dev_id'],
             'ts': 1_000_000,
             'started': 1_000_000,
             'messages': [],
+            'batteries': {
+                'test_battery': {
+                    'batt_type': self.tpl_dev_data['batt_type'],
+                    'batt_vnom': self.tpl_dev_data['batt_vnom'],
+                    'batt_cap': self.tpl_dev_data['batt_cap']
+                }
+            },
             'weekly': {
                 'start_ts': [123],
                 'discharge_speed_avg': [[0.5] * CHARGE_STEPS],
@@ -106,11 +125,11 @@ class TestKBattStats(unittest.TestCase):
             'hourly_load_avg': [[0] * 24],
             'hourly_load_samples': [[0] * 24],
         }
-        file_name = os.path.join(self.tmpdir, 'mqtt-power.' + self.dev_data['dev_id'] + '.json')
+        file_name = os.path.join(self.tmpdir, 'mqtt-power.' + self.tpl_dev_data['dev_id'] + '.json')
         with open(file_name, 'w', encoding='utf-8') as fh:
             json.dump(saved, fh)
 
-        kb = KBattStats(self.tmpdir, self.dev_data)
+        kb = KBattStats(self.tmpdir, self.tpl_dev_data)
 
         self.assertFalse(kb.invalid)
         self.assertEqual(len(kb._pdata['messages']), 0)
@@ -124,25 +143,30 @@ class TestKBattStats(unittest.TestCase):
         # File with mismatched dev_id
         mismatched = {
             'dev_id': 'other_device',
-            'batt_type': self.dev_data['batt_type'],
-            'batt_vnom': self.dev_data['batt_vnom'],
-            'batt_cap': self.dev_data['batt_cap'],
             'ts': 1_000_000,
             'started': 1_000_000,
             'messages': [],
+            'batteries': {
+                'test_battery': {
+                    'batt_type': self.tpl_dev_data['batt_type'],
+                    'batt_vnom': self.tpl_dev_data['batt_vnom'],
+                    'batt_cap': self.tpl_dev_data['batt_cap']
+                }
+            },
             'weekly': {},
             'hourly_load_avg': [],
             'hourly_load_samples': [],
         }
-        file_name = os.path.join(self.tmpdir, 'mqtt-power.' + self.dev_data['dev_id'] + '.json')
+
+        file_name = os.path.join(self.tmpdir, 'mqtt-power.' + self.tpl_dev_data['dev_id'] + '.json')
         with open(file_name, 'w', encoding='utf-8') as fh:
             json.dump(mismatched, fh)
 
-        kb = KBattStats(self.tmpdir, self.dev_data)
+        kb = KBattStats(self.tmpdir, self.tpl_dev_data)
 
         self.assertTrue(kb.invalid)
         # The _pdata should be the init_data stub
-        self.assertEqual(kb._pdata['dev_id'], self.dev_data['dev_id'])
+        self.assertEqual(kb._pdata['dev_id'], self.tpl_dev_data['dev_id'])
         self.assertEqual(len(kb._pdata['messages']), 1)
         self.assertEqual("different device" in kb.messages()[0], True)
 
@@ -150,7 +174,7 @@ class TestKBattStats(unittest.TestCase):
     ################################################
     def test_weekly_shift(self):
         """_weekly_shift inserts a new week and keeps the list at max length."""
-        kb = KBattStats(self.tmpdir, self.dev_data)
+        kb = KBattStats(self.tmpdir, self.tpl_dev_data)
 
         t = int(time.time())
         # Insert two additional weeks (we have one already)
@@ -176,7 +200,7 @@ class TestKBattStats(unittest.TestCase):
     ################################################
     def test_weekly_avg_add(self):
         """Test that the average calculation updates correctly."""
-        kb = KBattStats(self.tmpdir, self.dev_data)
+        kb = KBattStats(self.tmpdir, self.tpl_dev_data)
 
         # Initialize a sector
         sector = 5
@@ -200,7 +224,7 @@ class TestKBattStats(unittest.TestCase):
     ################################################
     def test_file_save_and_load_back(self):
         """file_save should persist data and we can reload it."""
-        kb = KBattStats(self.tmpdir, self.dev_data)
+        kb = KBattStats(self.tmpdir, self.tpl_dev_data)
         # Modify some data
         kb._pdata['weekly']['blackouts_count'][0] = 42
 
@@ -208,14 +232,43 @@ class TestKBattStats(unittest.TestCase):
         self.assertTrue(kb.file_save())
 
         # The file should exist
-        file_name = os.path.join(self.tmpdir, 'mqtt-power.' + self.dev_data['dev_id'] + '.json')
+        file_name = os.path.join(self.tmpdir, 'mqtt-power.' + self.tpl_dev_data['dev_id'] + '.json')
         self.assertTrue(os.path.exists(file_name))
 
         # Load a brand-new instance from the file
-        kb2 = KBattStats(self.tmpdir, self.dev_data)
+        kb2 = KBattStats(self.tmpdir, self.tpl_dev_data)
         self._validate_structure(kb2, 1)
         self.assertEqual(kb2._pdata['weekly']['blackouts_count'][0], 42)
 
+
+    ########################################
+    def test_update_hourly_load(self):
+        """Test of _update_hourly_load(), placing load averages in correct slots"""
+        # todo: move to base!
+        dd = copy.deepcopy(self.tpl_dev_data)
+        kb = KBattStats(self.tmpdir, dd)
+        upsc_data = copy.deepcopy(self.tpl_upsc_data)
+        pd = kb._pdata
+        t = time.localtime()
+        if t.tm_min == 59 and t.tm_sec == 59:
+            time.sleep(2)
+
+        hour = time.localtime().tm_hour
+        upsc_data['ups_load'] = '123'
+        kb._update_hourly_load(upsc_data)
+        self.assertEqual(pd['hourly_load_avg'][hour], 123)  # initials are zero
+        self.assertEqual(pd['hourly_load_samples'][hour], 1)
+
+        upsc_data['ups_load'] = '64'
+        kb._update_hourly_load(upsc_data)
+        self.assertEqual(pd['hourly_load_avg'][hour], 93)  # 123, 64
+        self.assertEqual(pd['hourly_load_samples'][hour], 2)
+
+
+    ################################################
+    def test_power_parameters(self):
+        # todo: pdata['ups']: power_rating translation, load_to_w factor,
+        pass
 
     ################################################
     def test_update_avg_int(self):
