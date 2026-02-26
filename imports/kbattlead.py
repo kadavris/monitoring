@@ -55,7 +55,7 @@ class KBattLead(kbattstats.KBattStats):
         err_prefix = "KBattLead ERROR:"
         self.type: int = kbattstats.BT_LEAD
 
-        self._calc_charge = bool(dev_data['calc_charge_data']) if 'calc_charge_data' in dev_data else False
+        self._calc_charge = dev_data['calc_charge_data']
         self._batteries['main'] = kbattstats.BData(100.0)
 
         # these below are for extrapolating voltage on charge to a real charge level
@@ -184,11 +184,11 @@ class KBattLead(kbattstats.KBattStats):
             return
 
         # pd = self._pdata
-        # dd = self._dev_data
+        dd = self._dev_data
 
         self._update_hourly_load(upsc_data)
 
-        load = float(upsc_data['ups_load'])
+        load = self.get_load_in_watts(upsc_data)
         discharging = bool(re.search(r'\bob\b', upsc_data['ups_status'], re.IGNORECASE))
         v = float(upsc_data['battery_voltage']) / self._pack_size
         charge = self._determine_charge(upsc_data, discharging)
@@ -229,7 +229,7 @@ class KBattLead(kbattstats.KBattStats):
             # adding normalized. Week shift will be performed in avg_add if needed
             if self._load_avg > 0.0:
                 self._weekly_avg_add('discharge_speed' if self._discharging else 'charge_speed',
-                             self._load_avg / self._time_in_charge_sector, self._charge_sector)
+                             self._load_avg * self._time_in_charge_sector, self._charge_sector)
 
         if not discharging and self._discharging:  # went OB->OL. Adding health stat
             if self._last_charge >= 80.0:
@@ -307,14 +307,16 @@ class KBattLead(kbattstats.KBattStats):
 
     ########################################
     @override
-    def get_battery_runtime(self) -> tuple[float, float, float]:
-        """Return battery runtime information: (to 80%, to 50%, to zero)"""
-        to80: float = 0.0
-        to50: float = 0.0
-        tozero: float = 0.0
+    def get_battery_runtime(self) -> tuple[int, int, int, int]:
+        """Return battery runtime information:
+        :return tuple(remaining Wh, secs to 80%, secs to 50%, secs to 10%)"""
 
         chlvl = self._batteries['main'].charge
+        capprc = 3600 * self._bdata['batt_cap_wh'] / 100.0
+        la = -1 if self._load_avg == 0.0 else self._load_avg
+        to80 = 0 if chlvl <= 80.0 else int(capprc * (chlvl - 80) / la)
+        to50 = 0 if chlvl <= 50.0 else int(capprc * (chlvl - 50) / la)
+        to10 = 0 if chlvl <= 10.0 else int(capprc * (chlvl - 10) / la)
 
-        # todo:
-        return to80, to50, tozero
+        return int(chlvl * capprc / 3600), to80, to50, to10
 

@@ -10,6 +10,7 @@
 """
 import argparse
 import configparser
+import json
 from configparser import ConfigParser, SectionProxy
 import os
 import os.path
@@ -157,9 +158,10 @@ def config_parse_power_option(csect: SectionProxy, name: str, def_unit: str) -> 
         return None, None
 
     if -1 == csect[name].find(','):
-        if csect[name][-1].lower() in 'pvw':  # percent, volt, watt
-            val = csect[name].rstrip('pvw')
+        if csect[name][-1].lower() in '%pvw':  # percent, volt, watt
+            val = csect[name].rstrip('%pvw')
             unit = csect[name][-1].lower()
+            if unit == 'p': unit = '%'
         elif csect[name][-1].lower() == 'a':  # VoltAmp
                 val = csect[name].rstrip('va')
                 unit = 'va'
@@ -185,10 +187,12 @@ def device_init(device: str) -> bool:
     :return: bool: success
     """
     global CONFIG, DEVICES, GLOBAL_CONFIG
-    dd = DEVICES[device] = {
+
+    dd: dict[str, Any] = {
         'dev_id': device,
         'sample_interval': int(CONFIG['sample_interval']),
     }
+    DEVICES[device] = dd
 
     csect_name = 'power.' + device
     if csect_name in GLOBAL_CONFIG:
@@ -213,7 +217,7 @@ def device_init(device: str) -> bool:
         dd['batt_cap'] = -1
 
     # -------------------------------
-    val, unit = config_parse_power_option(csect, 'load_zero', 'va')
+    val, unit = config_parse_power_option(csect, 'load_zero', 'w')
     if val is None:
         dd['load_zero'] = 0.0
         dd['load_zero_unit'] = 'w'
@@ -236,7 +240,7 @@ def device_init(device: str) -> bool:
         dd['load_reported_as'] = unit[0]
 
     # -------------------------------
-    val, unit = config_parse_power_option(csect, 'power_rating', 'w')
+    val, unit = config_parse_power_option(csect, 'power_rating', 'va')
     if val is None or val == -1.0:
         problems.append("Invalid power_rating def")
         dd['power_rating'] = -1
@@ -264,7 +268,7 @@ def device_init(device: str) -> bool:
     else:
         dd['standard_v'] = 230.0
 
-    dd['calc_charge_data'] = bool(csect['calc_charge_data']) if 'calc_charge_data' in csect else False
+    dd['calc_charge_data'] = csect['calc_charge_data'].lower() == "true" if 'calc_charge_data' in csect else False
 
     # list() options that may override common config:
     for overrides in ['one_to_one', 'bulk_report', 'log_items']:
@@ -446,17 +450,26 @@ def check_nut() -> bool:
                 'health': h['status']
             }
 
+        # WARNING! Past this point, upsc data will be replaced with normalized data!
+        report_on_upsc['data']['runtimes'] = dd['statobj'].get_battery_runtime()
+        report_on_upsc['data']['ups_load'] = dd['statobj'].get_load_in_watts(report_on_upsc['data'])
+
+        if dd['calc_charge_data']:
+            avgcharge = 0.0
+            for bname in battrep.keys():
+                avgcharge += battrep[bname]['charge']
+            avgcharge = avgcharge / len(battrep)
+            report_on_upsc['data']['battery_charge'] = str(avgcharge)
+            report_on_upsc['data']['battery_runtime'] = str(report_on_upsc['data']['runtimes'][3])
+
         # we will count the configured checks to report if none were enabled actually
         checks_run = 0
         checks_with_errors = 0
 
         # this will be sent last and be updated by other analysis code on the way
-        bulk_msg = '{ "model":"' + report_on_upsc['model'] + '", "errors":"' + report_on_upsc["errors"] + '"'
-
-        for k in report_on_upsc['data']:
-            bulk_msg += ', "' + k + '":"' + str(report_on_upsc['data'][k]) + '"'
-
-        bulk_msg += ' }'
+        report_on_upsc['data']['model'] = report_on_upsc['model']
+        report_on_upsc['data']['errors'] = report_on_upsc['errors']
+        bulk_msg = json.dumps(report_on_upsc['data'], sort_keys=True, indent=0)
 
         # --------------------------------
         if 'log_samples' in CONFIG:
@@ -505,7 +518,7 @@ def check_nut() -> bool:
                 checks_run += 1
 
                 if oto_attr in report_on_upsc['data']:
-                    msg = report_on_upsc['data'][oto_attr]
+                    msg = str(report_on_upsc['data'][oto_attr])
                 else:
                     if oto_attr in ['ups_alarm']:
                         msg = 'OK'
@@ -543,7 +556,7 @@ def check_nut() -> bool:
 ####################################################
 # MAIN
 parser = argparse.ArgumentParser(
-    description='Collecting power supply info and passing it to mqtt agent. V2.6.1.'
+    description='Collecting power supply info and passing it to mqtt agent. V2.6.2.'
                 ' Created by Andrej Pakhutin - pakhutin at gmail.'
     )
 parser.add_argument('-c', '--config', dest='config_path', action='store', default=DEFAULT_CONFIG_FILE,

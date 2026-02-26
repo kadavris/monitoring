@@ -47,7 +47,7 @@ class TestKBattLead(unittest.TestCase):
             'power_rating': 2000,
             'power_rating_unit': 'va',
             'power_factor': 0.8,
-            'load_reported_as': 'p',
+            'load_reported_as': 'w',
         }
         # TEMPLATE: upsc data
         self.tpl_upsc_data = {
@@ -247,18 +247,18 @@ class TestKBattLead(unittest.TestCase):
         sector = kb._charge_sector
 
         upsc_data = copy.deepcopy(self.tpl_upsc_data)
-        upsc_data['ups_load'] = '123'
+        upsc_data['ups_load'] = '23'
         upsc_data['ups_status'] = 'apparently ob'  # should detect OB
         upsc_data['battery_voltage'] = str((v - 0.01) * kb._pack_size)  # going down first
         kb._charge_state = _CS_NONE  # stub, doesn't matter
 
         kb.update_stats(upsc_data)  # making initial fix
-        self.assertEqual(kb._charge_sector, sector)  # should remain in a same sector
-        self.assertEqual(kb._discharging, True)  # no state transition
-        self.assertEqual(kb._load_avg, 123.0)
+        self.assertEqual(sector, kb._charge_sector)  # should remain in a same sector
+        self.assertEqual(True, kb._discharging)  # no state transition
+        self.assertEqual(23.0, kb._load_avg)
 
         # testing that there will be no transitions
-        upsc_data['ups_load'] = '456'
+        upsc_data['ups_load'] = '45'
         upsc_data['ups_status'] = 'as ob as can be'  # should detect OB
         # what matters is that it is higher than last
         upsc_data['battery_voltage'] = str(13.0 * kb._pack_size)
@@ -266,10 +266,10 @@ class TestKBattLead(unittest.TestCase):
         kb.update_stats(upsc_data)  # recording surge
 
         # stats updated correctly?
-        self.assertEqual(kb._charge_sector, sector)  # should remain in a same sector
-        self.assertEqual(kb._time_in_charge_sector, 2 * dd['sample_interval'])
-        self.assertAlmostEqual(kb._load_avg, (123 + 456) / 2, 2)
-        self.assertEqual(kb._state_samples, 2)
+        self.assertEqual(sector, kb._charge_sector)  # should remain in a same sector
+        self.assertEqual(2 * dd['sample_interval'], kb._time_in_charge_sector)
+        self.assertAlmostEqual((23 + 45) / 2, kb._load_avg, 2)
+        self.assertEqual(2, kb._state_samples)
 
 
     ########################################
@@ -282,7 +282,7 @@ class TestKBattLead(unittest.TestCase):
         kb = self._initialize_stats(dd, v, False)
 
         upsc_data = copy.deepcopy(self.tpl_upsc_data)
-        upsc_data['ups_load'] = '123'
+        upsc_data['ups_load'] = '23'
         upsc_data['ups_status'] = 'Obnoxious'  # should detect charging state
         upsc_data['battery_voltage'] = str((v + 0.01) * kb._pack_size)  # going UP first
         kb._charge_state = _CS_NONE  # stub, doesn't matter
@@ -290,8 +290,8 @@ class TestKBattLead(unittest.TestCase):
         kb.update_stats(upsc_data)  # making initial fix
         sector = kb._charge_sector
 
-        self.assertEqual(kb._discharging, False)  # no state transition
-        self.assertEqual(kb._load_avg, 123.0)
+        self.assertEqual(False, kb._discharging)  # no state transition
+        self.assertEqual(23.0, kb._load_avg)
 
         # testing that there will be no transitions
         upsc_data['ups_load'] = '456'
@@ -302,10 +302,10 @@ class TestKBattLead(unittest.TestCase):
         kb.update_stats(upsc_data)  # recording surge
 
         # stats updated correctly?
-        self.assertEqual(kb._charge_sector, sector)  # should remain in a same sector
-        self.assertEqual(kb._time_in_charge_sector, 2 * dd['sample_interval'])
-        self.assertAlmostEqual(kb._load_avg, (123 + 456) / 2, 2)
-        self.assertEqual(kb._state_samples, 2)
+        self.assertEqual(sector, kb._charge_sector)  # should remain in a same sector
+        self.assertEqual(2 * dd['sample_interval'], kb._time_in_charge_sector)
+        self.assertAlmostEqual((23 + 456) / 2, kb._load_avg, 2)
+        self.assertEqual(2, kb._state_samples)
 
 
     ########################################
@@ -324,7 +324,7 @@ class TestKBattLead(unittest.TestCase):
         w = kb._pdata['weekly']
 
         upsc_data = copy.deepcopy(self.tpl_upsc_data)
-        upsc_data['ups_load'] = '123'
+        upsc_data['ups_load'] = '12'
         upsc_data['ups_status'] = 'OB'
 
         v = _test_range[tr_index][1]  # get down to lower bound
@@ -354,7 +354,7 @@ class TestKBattLead(unittest.TestCase):
         dd['sample_interval'] = 42
 
         upsc_data = copy.deepcopy(self.tpl_upsc_data)
-        upsc_data['ups_load'] = '123'
+        upsc_data['ups_load'] = '17'
         upsc_data['ups_status'] = 'OB'
 
         # _test_range[N] is a tuple of
@@ -362,7 +362,7 @@ class TestKBattLead(unittest.TestCase):
         tr_index = 2
         v = _test_range[tr_index][1] + 0.01  # start slightly above the lower bound
         kb = self._initialize_stats(dd, v, True)
-        self.assertEqual(_test_range[tr_index][0], kb._charge_sector)  # check if test data is still correct
+        self.assertEqual(kb._charge_sector, _test_range[tr_index][0])  # check if test data is still correct
         w = kb._pdata['weekly']
 
         v = _test_range[tr_index][1]  # continue in this sector
@@ -370,8 +370,8 @@ class TestKBattLead(unittest.TestCase):
 
         kb.update_stats(upsc_data)  # making initial fix
 
-        self.assertEqual(_test_range[tr_index][0], kb._charge_sector)
-        self.assertEqual(kb._state_samples, 1)
+        self.assertEqual(kb._charge_sector, _test_range[tr_index][0])
+        self.assertEqual(1, kb._state_samples)
         prev_sector = kb._charge_sector
 
         # transit to a middle zone
@@ -382,13 +382,13 @@ class TestKBattLead(unittest.TestCase):
             count += 1
             upsc_data['battery_voltage'] = str(v * kb._pack_size)
             kb.update_stats(upsc_data)
-            self.assertEqual(_test_range[tr_index][0], kb._charge_sector, f'Count: {count}')
+            self.assertEqual(kb._charge_sector, _test_range[tr_index][0], f'Count: {count}')
             v -= 0.01
 
-        self.assertEqual(kb._state_samples, count)
+        self.assertEqual(count, kb._state_samples)
         for k in ['discharge_speed', 'charge_speed']:  # should be no stats recorded
-            self.assertEqual(w[k + '_avg'][0][prev_sector], 0.0)
-            self.assertEqual(w[k + '_samples'][0][prev_sector], 0)
+            self.assertEqual(0.0, w[k + '_avg'][0][prev_sector])
+            self.assertEqual(0, w[k + '_samples'][0][prev_sector])
 
         # transit to a final sector
         prev_sector = kb._charge_sector
@@ -396,15 +396,16 @@ class TestKBattLead(unittest.TestCase):
         v = _test_range[tr_index][2]  # high limit
         upsc_data['battery_voltage'] = str(v * kb._pack_size)
         kb.update_stats(upsc_data)
-        self.assertEqual(_test_range[tr_index][0], kb._charge_sector)
+        self.assertEqual(kb._charge_sector, _test_range[tr_index][0])
 
         # make sure there have been update of a full sector
-        self.assertEqual(w['charge_speed_avg'][0][prev_sector],0.0)
-        self.assertEqual(w['charge_speed_samples'][0][prev_sector], 0)
+        self.assertEqual(0.0, w['charge_speed_avg'][0][prev_sector])
+        self.assertEqual(0, w['charge_speed_samples'][0][prev_sector])
 
-        self.assertAlmostEqual(w['discharge_speed_avg'][0][prev_sector],
-                         float(upsc_data['ups_load']) / (count * dd['sample_interval']), delta=0.1)
-        self.assertEqual(w['discharge_speed_samples'][0][prev_sector], 1)
+        # due to approximation of timings, there will be a slight difference
+        self.assertAlmostEqual(float(upsc_data['ups_load']) * count * dd['sample_interval'] /
+                         w['discharge_speed_avg'][0][prev_sector], 1.0, 1)
+        self.assertEqual(1, w['discharge_speed_samples'][0][prev_sector])
 
 
     ########################################
@@ -414,7 +415,7 @@ class TestKBattLead(unittest.TestCase):
         dd['sample_interval'] = 42
 
         upsc_data = copy.deepcopy(self.tpl_upsc_data)
-        upsc_data['ups_load'] = '123'
+        upsc_data['ups_load'] = '26'
 
         # test OB-OL-OB
         upsc_data['ups_status'] = 'OB'

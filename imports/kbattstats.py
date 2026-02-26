@@ -42,6 +42,21 @@ def update_avg_float(old_avg: float, to_add: float, old_samples: int) -> tuple[f
     return (old_avg * old_samples + to_add) / (old_samples + 1), old_samples + 1
 
 
+def _to_watts(val: float, val_unit: str, rating: float, rating_unit: float) -> float:
+    """convert power-related value to watts"""
+    if val_unit == 'w':
+        return val
+
+    if val_unit == 'va':
+        return val * 0.8
+
+    # percent of rating
+    if rating_unit == 'va':
+        rating = rating * 0.8
+
+    return rating / 100.0 * val
+
+
 ########################################
 class KBattStats():
     def __init__(self, save_path: str, dev_data: dict) -> None:
@@ -117,6 +132,7 @@ class KBattStats():
 
         else:  #  no saved data - performing initial setup
             self._pdata = init_data
+
             # normalizing UPS parameters for stats (to Watts)
             ud = init_data['ups']
             if dev_data['power_rating'] != -1:
@@ -163,7 +179,7 @@ class KBattStats():
     def _update_hourly_load(self, ud: dict) -> None:
         """
         Updates hourly load averages from device data
-        :param ud: dict: upsc data as supplied by upsc
+        :param ud: dict: data supplied by upsc
         :return: None
         """
         hour = time.localtime().tm_hour
@@ -175,7 +191,7 @@ class KBattStats():
     ########################################
     def _weekly_shift(self) -> None:
         """
-        Shifts old weekly data to the back of list and adds fresh (zeroes) items for a new week in the front
+        Shifts old weekly data towards the back of list and adds fresh (zeroes) items for a new week in the front
         :return: None
         """
         t = int(time.time())
@@ -203,7 +219,7 @@ class KBattStats():
     ########################################
     def _weekly_avg_add(self, name: str, val: float, sector: int) -> None:
         """
-        Updates this week average value for specific item pair: <name>_avg and <name>_samples
+        Updates this week average value for a specific item pair: <name>_avg and <name>_samples
         :param name: base name of the item
         :param val: value to add
         :param sector: charge percentage sector to use
@@ -244,7 +260,7 @@ class KBattStats():
         except Exception as e:
             self._pdata['messages'].append("! ERROR saving statistics: " + str(e))
 
-        # trying to revert failed save
+        # trying to revert a failed save
         try:
             if not os.path.exists(self._file_name) and os.path.exists(bakfile):
                 os.rename(bakfile, self._file_name)
@@ -258,8 +274,8 @@ class KBattStats():
     def update_stats(self, upsc_data: dict) -> None:
         """
         Updates very common stats data with a new set from device.
-        This method should be overridden by subclasses, but it is a good idea to call original.
-        :param upsc_data: dict: device's current state
+        This method should be overridden by subclasses, but it is a good idea to call the base.
+        :param upsc_data: dict: device's current state as reported by upsc
         :return: None
         """
 
@@ -270,10 +286,8 @@ class KBattStats():
         else:
             self.battery_charge = -1.0
 
-            # Managing blackouts info
+        # Managing blackouts info
         if self._discharging:
-            # v = upsc_data['input_voltage']
-
             if not self._in_blackout:
                 self._in_blackout = True
                 w['blackouts_count'][0] += 1
@@ -286,10 +300,22 @@ class KBattStats():
     ########################################
     def messages(self) -> list[str]:
         """
-        Get a list of messages about this instance state. Usually errors ends up there.
+        Get a list of messages about this instance state. Errors usually ends up there.
         :return: list[str]
         """
         return self._pdata['messages']
+
+
+    ########################################
+    def get_load_in_watts(self, upsc_data: dict) -> int:
+        """Returns device's load value in Watts"""
+        load = float(upsc_data['ups_load'])
+        dd = self._dev_data
+        if load == 0.0 and dd['load_zero'] > 0.0:
+            return int(_to_watts(dd['load_zero'], dd['load_zero_unit'],
+                                        dd['power_rating'], dd['power_rating_unit']))
+
+        return int(upsc_data['ups_load']) * self._pdata['ups']['load_to_w']
 
 
     ########################################
@@ -300,7 +326,10 @@ class KBattStats():
 
     ########################################
     def get_battery_health(self, battery_id: str) -> dict:
-        """STUB: overriding member should return battery health information"""
+        """Abstract: overriding method should return battery health information
+        within a dict: {"cycles": [<soft>,<norm>,<bad>], "status": "Whatever", "tbf": <weeks berfore a failure>}
+        :param battery_id: battery ID as you know it or returned from get_batteries_list()
+        """
         return { "cycles": [0,0,0], "status": "This is stub!", "tbf": -1 }
 
 
@@ -311,7 +340,7 @@ class KBattStats():
 
 
     ########################################
-    def get_battery_runtime(self) -> tuple[float, float, float]:
-        """STUB: overriding member should return battery runtime information:
-        (to 80%, to 50%, to zero)"""
-        return -1.0, -1.0, -1.0
+    def get_battery_runtime(self) -> tuple[int, int, int, int]:
+        """Abstract: overriding method should return battery runtime information:
+        :return tuple(remaining Wh, secs to 80%, secs to 50%, secs to 10%)"""
+        return 0, 0, 0, 0
