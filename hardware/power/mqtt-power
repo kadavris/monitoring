@@ -268,7 +268,9 @@ def device_init(device: str) -> bool:
     else:
         dd['standard_v'] = 230.0
 
-    dd['calc_charge_data'] = csect['calc_charge_data'].lower() == "true" if 'calc_charge_data' in csect else False
+    dd['calc_charge_data'] = csect.getboolean('calc_charge_data', False)
+    dd['charging_current'] = csect.getint('charging_current', 10)
+
 
     # list() options that may override common config:
     for overrides in ['one_to_one', 'bulk_report', 'log_items']:

@@ -60,7 +60,8 @@ class KBattLead(kbattstats.KBattStats):
 
         # these below are for extrapolating voltage on charge to a real charge level
         # when device reports 100% and/or Vbatt > 100% right after going on mains
-        self._last_ob_v = -1.0  # last voltage in OB
+        self._last_v = -1.0  # last recirded voltage
+        self._last_v_step_up_ts = 0.0  # timestamp of the last voltage change. Used on > float charge
         self._last_charge = -1.0  # the charge from the last update.
         self._charge_state = _CS_NONE
 
@@ -110,7 +111,8 @@ class KBattLead(kbattstats.KBattStats):
     def _determine_charge(self, upsc_data: dict, discharging: bool) -> float:
         """
         Based on device's configuration will return batterg charge level as reported by device
-        or calculated by other means
+        or calculated by other means.
+        WARNING! Should be called once from update_stats() because it records state changes internally!
         :param upsc_data: dict: data collected from device interface
         :param discharging: bool: True if discharging mode is detected in currfent data packet
         :return: int: charge level in percents
@@ -131,19 +133,36 @@ class KBattLead(kbattstats.KBattStats):
         if discharging:
             self._charge_state = _CS_NONE
             self._batteries['main'].charge = _voltage_to_charge(v)
+            if v < self._last_v:
+                self._last_v = v
+
             return self._batteries['main'].charge
 
+        # Charging state
         # before we'll call charge percent calculation, we need to figure out some state for charging
-        if self._discharging:  # state change
+        if self._discharging:  # state changed OB->OL
             self._charge_state = _CS_BOOST
 
+        if v > self._last_v:
+            self._last_v = v
+            self._last_v_step_up_ts = time.time()
+
         if self._charge_state == _CS_BOOST:
-            # if voltage dropped, assuming we're past boost and on the float support
-            # 0.3 is a safe appr of boost v - float v minimal diff with a bit of jitter
-            if self._last_ob_v > _v_float and self._last_ob_v - v >= 0.3:
-                self._charge_state = _CS_FLOAT
+            if self._last_v > _v_float:  # we need to be creative in this voltage zone
+                # if voltage abruptly dropped, assuming we're past boost and on the float support
+                # 0.3 is a safe appr of boost v - float v minimal diff with a bit of jitter
+                if self._last_v - v >= 0.3:
+                    self._charge_state = _CS_FLOAT
+                    self._last_v = v
+
+                # here, assume if battery has not gained > 0.2V (~5.5%) of charge
+                # for the time it should have had with 10Amp current - it is in float state already.
+                elif time.time() - self._last_v_step_up_ts > \
+                        self._bdata['batt_cap'] / self._dev_data['charging_current'] * 3600:
+                    self._charge_state = _CS_FLOAT
+
         else:  # PAST_BOOST
-            if abs(v - _v_float) > 0.1:  # safeguard in case we missed some discharge cycle(s)
+            if abs(v - _v_float) >= 0.2:  # safeguard in case we missed some discharge cycle(s)
                 self._charge_state = _CS_BOOST
 
         if self._charge_state == _CS_BOOST:
@@ -163,7 +182,6 @@ class KBattLead(kbattstats.KBattStats):
         self._time_in_charge_sector = 0
         self._load_avg = load
         self._state_samples = 1
-        self._last_ob_v = v
         self._charge_state = _CS_NONE
 
 
@@ -198,7 +216,6 @@ class KBattLead(kbattstats.KBattStats):
             return
 
         charge_sector = int(charge / kbattstats.SECTOR_WIDTH)
-        self._last_ob_v = v
 
         # Are there state transitions? important rule: no direction change
         # Jitter detection: may jolt up on discharge and down on a charge

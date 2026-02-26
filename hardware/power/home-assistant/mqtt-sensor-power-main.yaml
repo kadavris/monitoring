@@ -1,0 +1,135 @@
+# NOTE: This file is included from the main configuration.yaml by the statement:
+# mqtt:
+#   sensor: !include_dir_merge_list inc/mqtt/sensor
+
+#------------------------------------------------
+# UPS:
+#------------------------------------------------
+
+#in json:
+#battery_energysave
+#input_frequency
+#output_voltage
+#output_frequency
+#output_current
+#output_current_nominal
+#ups_power_nominal
+#ups_power
+
+- name: "Main UPS: state"
+  state_topic: "hw/power/main/state"
+  json_attributes_topic: "hw/power/main"
+  device:
+    manufacturer: "{{ value_json.device_mfr }}"
+    model: "{{ value_json.device_model }}"
+    name: "Main UPS"
+    identifiers: "2E PS2000L"
+
+- name: "Main UPS: Alarms"
+  state_topic: "hw/power/main/ups_alarm"
+
+- name: "Main UPS: battery charge (from device)"
+  state_topic: "hw/power/main/batt_charge"
+  unit_of_measurement: '%'
+  device_class: battery
+
+- name: "Main UPS: battery time left (by device)"
+  state_topic: "hw/power/main/batt_runtime"
+  unit_of_measurement: 'h'
+  device_class: duration
+
+- name: "Main UPS: battery voltage"
+  state_topic: "hw/power/main/batt_voltage"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: '{{ float(value)|round(1) }}'
+
+- name: "Main UPS: load"
+  unique_id: "main_ups_load"
+  state_topic: "hw/power/main/out_load"
+  unit_of_measurement: 'W'
+  device_class: power
+
+- name: "Main UPS: temperature"
+  state_topic: "hw/power/main/ups_temperature"
+  unit_of_measurement: '°C'
+  device_class: temperature
+
+- name: "Main UPS: input voltage"
+  state_topic: "hw/power/main/in_volts"
+  unit_of_measurement: 'V'
+  device_class: voltage
+
+- name: "Main UPS: IN voltage mean/minute"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: "{{ value_json.voltage_mean_minute }}"
+
+- name: "Main UPS: IN voltage mean/hour"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: "{{ value_json.voltage_mean_hour }}"
+
+- name: "Main UPS: IN voltage mean/day"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'V'
+  device_class: voltage
+  value_template: "{{ value_json.voltage_mean_day }}"
+
+- name: "Main UPS: IN freq mean/hour"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'Hz'
+  value_template: "{{ value_json.frequency_mean_hour }}"
+
+- name: "Main UPS: Blackouts detected"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  value_template: "{{ value_json.blackouts }}"
+
+- name: "Main UPS: Time in blackouts"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  device_class: duration
+  unit_of_measurement: 'h'
+  value_template: "{{ (float(value_json.time_in_blackouts) / 3600.0) | round(1) }}"
+
+# UPS: data freshness check. Look at the counterpart yaml with non-nqtt sensors definitions in inc/sensors
+- name: "Main UPS: last update"
+  state_topic: "hw/power/main/updated"
+  json_attributes_topic: "hw/power/main/updated"
+  value_template: "{{ value_json.timestamp }}"
+
+- name: "Main UPS: run time to 10%"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'h'
+  device_class: duration
+  value_template: "{{ value_json.runtimes[3] / 3600.0 | round(1) }}"
+
+- name: "Main UPS: run time to 50%"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'h'
+  device_class: duration
+  value_template: "{{ value_json.runtimes[2] / 3600.0 | round(1) }}"
+
+- name: "Main UPS: run time to 80%"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'h'
+  device_class: duration
+  value_template: "{{ value_json.runtimes[1] / 3600.0 | round(1) }}"
+
+- name: "Main UPS: remaining capacity"
+  state_topic: "hw/power/main"
+  json_attributes_topic: "hw/power/main"
+  unit_of_measurement: 'Wh'
+  device_class: energy_storage
+  value_template: "{{ value_json.runtimes[0] }}"
+

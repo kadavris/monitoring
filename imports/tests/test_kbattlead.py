@@ -44,6 +44,7 @@ class TestKBattLead(unittest.TestCase):
             'batt_vnom': 48,
             'batt_cap': 230,
             'calc_charge_data': True,
+            'charging_current': 10,
             'power_rating': 2000,
             'power_rating_unit': 'va',
             'power_factor': 0.8,
@@ -147,8 +148,7 @@ class TestKBattLead(unittest.TestCase):
     def test_get_charge_percent_no_calc(self):
         """Test of get_charge_percent() without 'calculate' option"""
         dd = copy.deepcopy(self.tpl_dev_data)
-        # dd['calc_charge_data'] = 'False'
-        del dd['calc_charge_data']
+        dd['calc_charge_data'] = False
         kb = KBattLead(self.tmpdir, dd)
         self.assertEqual(kb._calc_charge, False)
 
@@ -168,7 +168,7 @@ class TestKBattLead(unittest.TestCase):
         just see if this works at the top level. We already tested _voltage_to_charge()"""
 
         dd = copy.deepcopy(self.tpl_dev_data)
-        dd['calc_charge_data'] = 'true'
+        dd['calc_charge_data'] = True
         kb = KBattLead(self.tmpdir, dd)
         self.assertEqual(kb._calc_charge, True)
 
@@ -185,7 +185,7 @@ class TestKBattLead(unittest.TestCase):
         """Test of get_charge_percent(), calculating from voltage at CHARGING time.
         The plan is to chack if it correctly switches on voltage CA/CV/float transitions"""
         dd = copy.deepcopy(self.tpl_dev_data)
-        dd['calc_charge_data'] = 'true'
+        dd['calc_charge_data'] = True
         kb = KBattLead(self.tmpdir, dd)
         self.assertEqual(kb._calc_charge, True)
 
@@ -194,25 +194,25 @@ class TestKBattLead(unittest.TestCase):
         # Checking w/o transition over boost
         kb._charge_state = _CS_BOOST
         kb._discharging = False
-        kb._last_ob_v = 11.0
+        kb._last_v = 11.0
         for tp in [ (11.15, 18.1), (12.05, 43.1), (13.0, 69.4) ]:
             upsc_data['battery_voltage'] = str(tp[0] * kb._pack_size)
             self.assertEqual(kb._determine_charge(upsc_data, False), tp[1], 'Calculated-pre-boost')
             self.assertEqual(kb._charge_state, _CS_BOOST)
 
-        kb._last_ob_v = 11.0
+        kb._last_v = 11.0
         v = 14.0  # _v_boost - 0.1 -> 14.0 == 97%
         upsc_data['battery_voltage'] = str(v * kb._pack_size)
         self.assertEqual(kb._determine_charge(upsc_data, False), _v_to_charge_linear(v), 'Calculated-before-boost')
         self.assertEqual(kb._charge_state, _CS_BOOST)
 
-        kb._last_ob_v = 14.0
+        kb._last_v = 14.0
         v = _v_float  # should change to FLOAT/100%
         upsc_data['battery_voltage'] = str(v * kb._pack_size)
         self.assertEqual(kb._determine_charge(upsc_data, False), 100.0, 'Calculated-past-boost')
         self.assertEqual(kb._charge_state, _CS_FLOAT)
 
-        kb._last_ob_v = _v_float
+        kb._last_v = _v_float
         v = _v_float - 0.5  # should change to BOOST
         upsc_data['battery_voltage'] = str(v * kb._pack_size)
         self.assertAlmostEqual(kb._determine_charge(upsc_data, False), _v_to_charge_linear(v), 1, 'Calc-ret-to-pre-boost')
@@ -228,7 +228,7 @@ class TestKBattLead(unittest.TestCase):
         dd['battery_voltage'] = v * kb._pack_size
 
         kb._discharging = discharging
-        kb._last_ob_v = v  # last voltage we seen OB
+        kb._last_v = v  # last voltage we seen OB
         charge = kb._determine_charge(dd, discharging)
         kb._charge_sector = int(charge / SECTOR_WIDTH)
         kb._charge_sector_start = charge
