@@ -1,8 +1,10 @@
-import time
-from typing import override
-
+import copy
+from configparser import ConfigParser, SectionProxy
 import kadpy.kbattstats as kbattstats
-import re
+import kadpy.kpowerutils as kpu
+from kadpy.kpowerutils import KPowerDeviceCommons
+import time
+from typing import Any, override
 
 # Lead-acid battery constants
 _volts_at_charge: list[float] = [
@@ -49,62 +51,28 @@ class KBattLead(kbattstats.KBattStats):
     """
     Class for managing statistics for Lead-Acid battery types
     """
-    def __init__(self, save_path: str, dev_data: dict) -> None:
-        super().__init__(save_path, dev_data)
+    def __init__(self, batt_id: str, dev_commons: KPowerDeviceCommons, config: ConfigParser,
+                 old_stats: dict | None) -> None:
+        super().__init__(batt_id, dev_commons, config, old_stats)
 
         err_prefix = "KBattLead ERROR:"
-        self.type: int = kbattstats.BT_LEAD
 
-        self._calc_charge = dev_data['calc_charge_data']
-        self._batteries['main'] = kbattstats.BData(100.0)
+        dev_conf = config['power.' + dev_commons.dev_id]
+        batt_conf_name = 'battery.' + batt_id
+        if batt_conf_name in config:
+            batt_conf = config[batt_conf_name]
+        else:
+            batt_conf = dev_conf
 
         # these below are for extrapolating voltage on charge to a real charge level
-        # when device reports 100% and/or Vbatt > 100% right after going on mains
-        self._last_v = -1.0  # last recirded voltage
+        # when device reports 100% and/or V-batt > 100% right after going on mains
+        self._last_v = -1.0  # last recorded voltage
         self._last_v_step_up_ts = 0.0  # timestamp of the last voltage change. Used on > float charge
-        self._last_charge = -1.0  # the charge from the last update.
         self._charge_state = _CS_NONE
-
-        if 'main' in self._pdata['batteries']:  # old file was loaded
-            # checking if battery definition is the same
-            oldbdata = self._pdata['batteries']['main']
-            for item in ['batt_type', 'batt_vnom', 'batt_cap']:
-                if not item in oldbdata:
-                    self.invalid = True
-                    self._pdata['messages'].append(err_prefix + "battery definition missing: " + item)
-                else:
-                    if dev_data[item] != oldbdata[item]:
-                        self.invalid = True
-                        self._pdata['messages'].append(err_prefix + \
-                                                     "has different battery definition in " + item)
-        else:
-            ud = self._pdata['ups']
-            batt_cap_wh = dev_data['batt_cap'] * ud['power_factor'] * dev_data['batt_vnom']
-            self._pdata['batteries']['main'] = {
-                'registered': [int(time.time()), time.asctime()],
-                'batt_type': dev_data['batt_type'],
-                'batt_vnom': dev_data['batt_vnom'],
-                'batt_cap': dev_data['batt_cap'],
-                'batt_cap_wh': batt_cap_wh,
-                'ideal_sector_speed': 3600 * batt_cap_wh / (kbattstats.CHARGE_STEPS - 1),
-                'health': {
-                    'cycles': [0,0,0],
-                    'status': "OK",
-                    'tbf': -1,
-                },
-            }
-
-        self._bdata = self._pdata['batteries']['main']
-        self._pack_size = self._dev_data['pack_size'] = self._bdata['batt_vnom'] / 12.0
+        self._pack_size: int = self.v_nom // 12
 
         if self.invalid:
             return
-
-
-    ########################################
-    def get_battery_charge(self, battery_id: str) -> float:
-        """returns battery charge information"""
-        return self._batteries['main'].charge
 
 
     ########################################
@@ -118,29 +86,29 @@ class KBattLead(kbattstats.KBattStats):
         :return: int: charge level in percents
         """
         if self.invalid:  # make it a visible problem on a dashboard
-            self._batteries['main'].charge = -1.0
+            self.charge = 100.0
             return -1.0
 
         # should we calculate?
-        if not self._calc_charge:
+        if not self._calc_charge_data:
             if 'battery_charge' in upsc_data:
-                self._batteries['main'].charge = round(float(upsc_data['battery_charge']), 1)
-                return self._batteries['main'].charge
+                self.charge = round(float(upsc_data['battery_charge']), 1)
+                return self.charge
 
         # Is device lying to us? (probably we need a config option for this calculated item)
         v = float(upsc_data['battery_voltage']) / self._pack_size
 
         if discharging:
             self._charge_state = _CS_NONE
-            self._batteries['main'].charge = _voltage_to_charge(v)
+            self.charge = _voltage_to_charge(v)
             if v < self._last_v:
                 self._last_v = v
 
-            return self._batteries['main'].charge
+            return self.charge
 
         # Charging state
         # before we'll call charge percent calculation, we need to figure out some state for charging
-        if self._discharging:  # state changed OB->OL
+        if self._was_discharging:  # state changed OB->OL
             self._charge_state = _CS_BOOST
 
         if v > self._last_v:
@@ -158,7 +126,7 @@ class KBattLead(kbattstats.KBattStats):
                 # here, assume if battery has not gained > 0.2V (~5.5%) of charge
                 # for the time it should have had with 10Amp current - it is in float state already.
                 elif time.time() - self._last_v_step_up_ts > \
-                        self._bdata['batt_cap'] / self._dev_data['charging_current'] * 3600:
+                        self.capacity_ah / self.commons.charging_current * 3600:
                     self._charge_state = _CS_FLOAT
 
         else:  # PAST_BOOST
@@ -166,19 +134,19 @@ class KBattLead(kbattstats.KBattStats):
                 self._charge_state = _CS_BOOST
 
         if self._charge_state == _CS_BOOST:
-            self._batteries['main'].charge = round((v - _v_fatal) / (_v_boost - _v_fatal) * 100.0, 1)  # using linear scale for simplicity
+            self.charge = round((v - _v_fatal) / (_v_boost - _v_fatal) * 100.0, 1)  # using linear scale for simplicity
         else:
-            self._batteries['main'].charge = 100.0
+            self.charge = 100.0
 
-        return self._batteries['main'].charge
+        return self.charge
 
 
     ########################################
     def _init_for_new_sector(self, upsc_data: dict, discharging: bool, load: float,
                              v: float, charge: float) -> None:
-        self._charge_sector = int(charge / kbattstats.SECTOR_WIDTH)
+        self._charge_sector = int(charge / kpu.SECTOR_WIDTH)
         self._charge_sector_start = charge
-        self._discharging = discharging
+        self._was_discharging = discharging
         self._time_in_charge_sector = 0
         self._load_avg = load
         self._state_samples = 1
@@ -187,27 +155,22 @@ class KBattLead(kbattstats.KBattStats):
 
     ########################################
     @override
-    def update_stats(self, upsc_data: dict) -> None:
+    def process_upsc_data(self, upsc_data: dict) -> None:
         """
         Updates stats data breakdowns with new set from device
         :param upsc_data: dict: device's current state
         :return: None
         """
-        super().update_stats(upsc_data)  # update common stuff
+        super().process_upsc_data(upsc_data)  # update common stuff
 
         if self.invalid:
             return
 
-        if 'battery_voltage' not in upsc_data or 'ups_load' not in upsc_data:
+        if 'battery_voltage' not in upsc_data:
             return
 
-        # pd = self._pdata
-        dd = self._dev_data
-
-        self._update_hourly_load(upsc_data)
-
-        load = self.get_load_in_watts(upsc_data)
-        discharging = bool(re.search(r'\bob\b', upsc_data['ups_status'], re.IGNORECASE))
+        load = self.commons.last_load
+        discharging = self.commons.on_battery
         v = float(upsc_data['battery_voltage']) / self._pack_size
         charge = self._determine_charge(upsc_data, discharging)
 
@@ -215,18 +178,18 @@ class KBattLead(kbattstats.KBattStats):
             self._init_for_new_sector(upsc_data, discharging, load, v, charge)
             return
 
-        charge_sector = int(charge / kbattstats.SECTOR_WIDTH)
+        charge_sector = int(charge / kpu.SECTOR_WIDTH)
 
         # Are there state transitions? important rule: no direction change
         # Jitter detection: may jolt up on discharge and down on a charge
-        if discharging == self._discharging \
+        if discharging == self._was_discharging \
             and ( charge_sector == self._charge_sector
                 or ( discharging and charge_sector > self._charge_sector )
                 or ( not discharging and charge_sector < self._charge_sector)):
             # let's say it's still the same
-            self._last_charge = charge
-            self._time_in_charge_sector += self._dev_data['sample_interval']
-            self._load_avg, self._state_samples = kbattstats.update_avg_float(self._load_avg, load,
+            self.charge = charge
+            self._time_in_charge_sector += self.commons.sample_interval
+            self._load_avg, self._state_samples = kpu.update_avg_float(self._load_avg, load,
                                                                               self._state_samples)
             return
 
@@ -234,52 +197,47 @@ class KBattLead(kbattstats.KBattStats):
         # Check if we have enough time in a previous state to extrapolate if needed.
         # We want a recorded charge range to be more than 70%+ of this sector width
         ch_left: float
-        if self._discharging:  # want to operate on a previous sector's bound
-            ch_left = (self._charge_sector + 1) * kbattstats.SECTOR_WIDTH - self._charge_sector_start
+        if self._was_discharging:  # want to operate on a previous sector's bound
+            ch_left = (self._charge_sector + 1) * kpu.SECTOR_WIDTH - self._charge_sector_start
         else:
-            ch_left = self._charge_sector_start - self._charge_sector * kbattstats.SECTOR_WIDTH
+            ch_left = self._charge_sector_start - self._charge_sector * kpu.SECTOR_WIDTH
 
-        if ch_left / kbattstats.SECTOR_WIDTH <= 0.5:  # are there less than 50%+ of sector width left unaccounted?
+        if ch_left / kpu.SECTOR_WIDTH <= 0.5:  # are there less than 50%+ of sector width left unaccounted?
             if ch_left > 0.0:  # need to extrapolate
-                self._time_in_charge_sector += int(self._time_in_charge_sector * ch_left / kbattstats.SECTOR_WIDTH)
+                self._time_in_charge_sector += int(self._time_in_charge_sector * ch_left / kpu.SECTOR_WIDTH)
 
             # adding normalized. Week shift will be performed in avg_add if needed
             if self._load_avg > 0.0:
-                self._weekly_avg_add('discharge_speed' if self._discharging else 'charge_speed',
+                self._weekly_avg_add('discharge_speed' if self._was_discharging else 'charge_speed',
                              self._load_avg * self._time_in_charge_sector, self._charge_sector)
 
-        if not discharging and self._discharging:  # went OB->OL. Adding health stat
-            if self._last_charge >= 80.0:
-                self._bdata['health']['cycles'][0] += 1
-            elif self._last_charge >= 50.0:
-                self._bdata['health']['cycles'][1] += 1
+        if not discharging and self._was_discharging:  # went OB->OL. Adding health stat
+            if self.charge >= 80.0:
+                self._pdata['health']['cycles'][0] += 1
+            elif self.charge >= 50.0:
+                self._pdata['health']['cycles'][1] += 1
             else:
-                self._bdata['health']['cycles'][2] += 1
+                self._pdata['health']['cycles'][2] += 1
 
         self._init_for_new_sector(upsc_data, discharging, load, v, charge)
-        self._last_charge = charge
+        self.charge = charge
 
 
     ########################################
     @override
-    def get_battery_health(self, battery_id: str) -> dict:
+    def get_battery_health(self) -> dict:
         """Returns battery health information, the battery id is ignored"""
-        bdata = self._bdata
-        bdh = bdata['health']
+        bdh = self._pdata['health']
 
         if self.invalid:
             bdh['status'] = "Invalid setup!"
-            return bdh
-
-        if self._dev_data['power_rating'] == -1:
-            bdh['status'] = "No power rating in config"
             return bdh
 
         dspeed_avg = 0.0
         samples = 0
         # Look at the last month worth of data max, to not spoil average too much
         for week in range(min(4, len(self._pdata['weekly']['discharge_speed_avg']))):
-            for cs in range(1, kbattstats.CHARGE_STEPS):  # not counting <10% and 100% zones
+            for cs in range(1, kpu.CHARGE_STEPS):  # not counting <10% and 100% zones
                 v = self._pdata['weekly']['discharge_speed_avg'][week][cs]
                 if v > 0.0:
                     dspeed_avg += v
@@ -291,7 +249,7 @@ class KBattLead(kbattstats.KBattStats):
         status = []
         if samples >= 5:  # ensure there are some variety
             dspeed_avg /= samples
-            wellness = round(dspeed_avg / bdata['ideal_sector_speed'], 2)
+            wellness = round(dspeed_avg / self._ideal_sector_speed, 2)
         else:
             wellness = 1.0
             # cycles: < nice >, < normal >, < worst >
@@ -319,21 +277,7 @@ class KBattLead(kbattstats.KBattStats):
 
         bdh['status'] = ', '.join(status)
         bdh['wellness'] = int(wellness)
-        return bdh
+        return copy.deepcopy(bdh)
 
 
-    ########################################
-    @override
-    def get_battery_runtime(self) -> tuple[int, int, int, int]:
-        """Return battery runtime information:
-        :return tuple(remaining Wh, secs to 80%, secs to 50%, secs to 10%)"""
-
-        chlvl = self._batteries['main'].charge
-        capprc = 3600 * self._bdata['batt_cap_wh'] / 100.0
-        la = -1 if self._load_avg == 0.0 else self._load_avg
-        to80 = 0 if chlvl <= 80.0 else int(capprc * (chlvl - 80) / la)
-        to50 = 0 if chlvl <= 50.0 else int(capprc * (chlvl - 50) / la)
-        to10 = 0 if chlvl <= 10.0 else int(capprc * (chlvl - 10) / la)
-
-        return int(chlvl * capprc / 3600), to80, to50, to10
 
