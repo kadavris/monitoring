@@ -3,13 +3,15 @@
 # Run without arguments to get help
 
 ENVFILE="./service-env"
+DEFLIST="mikrotik power storage"
+FULLIST=$DEFLIST
 
 if [ "$1" == "" ]; then
     echo "Use 'install.sh [-e <env file name>] <name> ... <name>'"
     echo "  '-e' option is to provide the existing environment variable list file with correct paths"
     echo "     by default $ENVFILE will be used"
     echo "For '<name>' - specify 'all' to install all of the utilities from this repo,"
-    echo "or a combination of 'mikrotik', 'power' and 'storage' to install specific ones."
+    echo "or a combination of $FULLLIST to install specific ones."
     echo "NOTE: This script will not overwrite existing .ini files."
     exit 0
 fi
@@ -93,7 +95,7 @@ function install_mikrotik() {
 }
 
 function install_power() {
-    install_deps kbattstats.py kbattlead.py
+    install_deps kbatteries.py kbattstats.py kbattlead.py kpowerutils.py kpowerdevice.py
     srcd="hardware/power"
     $INST $EXEOPT "${srcd}/mqtt-power" "$BINDIR"
     install_to_dir_w_check "${srcd}/mqtt-power.service.sample" "${SYSTEMD}" "mqtt-power.service" "$SVCOPT"
@@ -110,7 +112,7 @@ function install_storage() {
 
 ########################
 if [ "$1" == "all" ]; then
-    list="mikrotik power storage"
+    list=$DEFLIST
 else
     list="$1"
 fi

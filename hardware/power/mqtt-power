@@ -10,8 +10,10 @@
 """
 import argparse
 import configparser
-import json
 from configparser import ConfigParser, SectionProxy
+import json
+from kadpy.kmqtt import KMQTT
+from kadpy.kpowerdevice import KPowerDevice
 import os
 import os.path
 import re
@@ -22,17 +24,12 @@ import subprocess
 import time
 from typing import Any
 
-from kadpy.kbattstats import KBattStats
-from kadpy.kbattlead import KBattLead
-from kadpy.kmqtt import KMQTT
-
 # globals and prototypes to shut IDE up
 DEFAULT_CONFIG_PATH = '/etc/smarthome/monitoring/'
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_PATH + 'mqtt-power.ini'
 GLOBAL_CONFIG: ConfigParser = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
-CONFIG: SectionProxy
 Sender: KMQTT
-DEVICES: dict = {} # will hold device's current data for continuous processing and statistics
+DEVICES: dict[str, KPowerDevice] = {}
 
 #############################################################
 def handle_termination(signum, frame) -> None:
@@ -53,7 +50,7 @@ def handle_termination(signum, frame) -> None:
 
 
 #############################################################
-def load_config(c_file: str):
+def load_config(c_file: str) -> None:
     """
     Will load configuration file, checking for problems beforehand
     :param c_file: path to config file
@@ -74,19 +71,14 @@ def load_config(c_file: str):
         print("+ Loading config:", file)
 
     GLOBAL_CONFIG.read(file)
-    if GLOBAL_CONFIG.has_section('power'):
-        return GLOBAL_CONFIG['power']
-
-    print("! 'No 'power' section found in config file:", file, file=sys.stderr)
-    sys.exit(1)
 
 
 ########################################
-def update_vf_stats(device: str, prefix: str, time_value: int, voltage: float, freq: float) -> None:
+def update_vf_stats(dev_id: str, prefix: str, time_value: int, voltage: float, freq: float) -> None:
     """
     Will update stats[ device ] with per-minute, hourly or daily values depending on a prefix value.
     All keys in form prefix + 'string' must be in sync with outer function for values to be reported successfully
-    :param device: str: device path
+    :param dev_id: str: device path
     :param prefix: str: 'm'/'h'/'d' - time fraction unit
     :param time_value: int: time part value that we're accounting for
     :param voltage: float: as reported by device
@@ -95,7 +87,7 @@ def update_vf_stats(device: str, prefix: str, time_value: int, voltage: float, f
     """
     global stats_vf
 
-    ds = stats_vf[device]
+    ds = stats_vf[dev_id]
     if ds[prefix + 'start'] != time_value:  # new time period?
         # making old mean the 1st value of this period
         ds[prefix + 'samples'] = 1 if ds[prefix + '_v_mean'] > 0 else 0
@@ -120,7 +112,7 @@ def update_vf_stats(device: str, prefix: str, time_value: int, voltage: float, f
         ds['in_bo'] = False
     else:
         if prefix == 'd':  # update blackouts once per m/h/d calls series
-            ds['bo_time'] += int(CONFIG['sample_interval'])
+            ds['bo_time'] += int(GLOBAL_CONFIG['power.' + dev_id]['sample_interval'])
             if not ds['in_bo']:
                 ds['blackouts'] += 1
                 ds['in_bo'] = True
@@ -132,217 +124,99 @@ def update_vf_stats(device: str, prefix: str, time_value: int, voltage: float, f
 
 
 ########################################
-def get_model_specific_config(device: str, keyword: str, default: str = "") -> str:
+def get_model_specific_config(dev_id: str, keyword: str, default: str = "") -> str:
     """
     Return the value of model-specific setting from config.
-    :param device: str. NUT's ID of UPS device
+    :param dev_id: str. NUT's ID of UPS device
     :param keyword: str. Attribute/keyword name
     :param default: str. Default value to return if not found
     :return: str. The value
     """
-    global CONFIG, GLOBAL_CONFIG
+    global GLOBAL_CONFIG
 
-    specific_section = "power." + device
-    if specific_section in GLOBAL_CONFIG \
-            and keyword in GLOBAL_CONFIG[specific_section]:
-        return GLOBAL_CONFIG[specific_section][keyword]
-
-    if keyword in CONFIG:  # check if config has default of its own
-        return CONFIG[keyword]
-
-    return default
-
-########################################
-def config_parse_power_option(csect: SectionProxy, name: str, def_unit: str) -> tuple[float | None, str | None]:
-    if name not in csect:
-        return None, None
-
-    if -1 == csect[name].find(','):
-        if csect[name][-1].lower() in '%pvw':  # percent, volt, watt
-            val = csect[name].rstrip('%pvw')
-            unit = csect[name][-1].lower()
-            if unit == 'p': unit = '%'
-        elif csect[name][-1].lower() == 'a':  # VoltAmp
-                val = csect[name].rstrip('va')
-                unit = 'va'
-        else:
-            val = csect[name]
-            unit = def_unit
-    else:
-        val, unit = csect[name].split(',')
-
-    try:
-        val = float(val)
-    except ValueError:
-        return -1.0, 'Bad value'
-
-    return val, unit
+    return GLOBAL_CONFIG["power." + dev_id].get(keyword, default)
 
 
 ########################################
-def device_init(device: str) -> bool:
+def device_init(dev_id: str) -> bool:
     """
     Prepares device data sourced from configuration file.
-    :param device: str: device ID
+    :param dev_id: str: device ID
     :return: bool: success
     """
-    global CONFIG, DEVICES, GLOBAL_CONFIG
+    global DEVICES, GLOBAL_CONFIG
 
-    dd: dict[str, Any] = {
-        'dev_id': device,
-        'sample_interval': int(CONFIG['sample_interval']),
-    }
-    DEVICES[device] = dd
-
-    csect_name = 'power.' + device
-    if csect_name in GLOBAL_CONFIG:
-        csect = GLOBAL_CONFIG[csect_name]
-    else:
-        csect = {}
-
-    problems = []  # will hold an itemized list of any problems encountered
-    if 'battery' in csect:
-        binfo = csect['battery'].split(',')  #'battery=<type>,<nominal voltage>,<pack's A/h>'
-        if len(binfo) != 3 or binfo[0].lower() not in ['pb','lifepo'] \
-            or not binfo[1].isdigit() or not binfo[2].isdigit() \
-            or int(binfo[1]) % 12 != 0 or int(binfo[1]) < 12 or int(binfo[2]) < 1:
-             problems.append('Battery definition error')
-        else:
-            dd['batt_type'] = binfo[0]
-            dd['batt_vnom'] = int(binfo[1])
-            dd['batt_cap'] = int(binfo[2])
-    else:
-        dd['batt_type'] = 'UNDEFINED'
-        dd['batt_vnom'] = -1
-        dd['batt_cap'] = -1
-
-    # -------------------------------
-    val, unit = config_parse_power_option(csect, 'load_zero', 'w')
-    if val is None:
-        dd['load_zero'] = 0.0
-        dd['load_zero_unit'] = 'w'
-    elif val == -1.0:
-        problems.append("Invalid load_zero def")
-        dd['load_zero'] = -1
-        dd['load_zero_unit'] = 'UNKNOWN'
-    else:
-        dd['load_zero'] = val
-        dd['load_zero_unit'] = unit
-
-    if 'load_reported_as' in csect:
-        unit = csect['load_reported_as'].lower()
-    else:
-        unit = 'p'
-
-    if unit[0] not in 'pvw':
-        problems.append("Invalid load_reported_as def")
-    else:
-        dd['load_reported_as'] = unit[0]
-
-    # -------------------------------
-    val, unit = config_parse_power_option(csect, 'power_rating', 'va')
-    if val is None or val == -1.0:
-        problems.append("Invalid power_rating def")
-        dd['power_rating'] = -1
-        dd['power_rating_unit'] = 'UNKNOWN'
-    else:
-        dd['power_rating'] = val
-        dd['power_rating_unit'] = unit
-
-    # -------------------------------
-    if 'power_factor' in csect:
-        try:
-            dd['power_factor'] = float(csect['power_factor'])
-        except ValueError:
-            problems.append("Invalid power_factor def")
-    else:
-        dd['power_factor'] = 0.8
-
-    if 'standard_v' in csect:
-        sv = dd['standard_v'].split(',')
-
-        try:
-            dd['standard_v'] = float(sv[0])
-        except ValueError:
-            problems.append("Invalid standard_v def")
-    else:
-        dd['standard_v'] = 230.0
-
-    dd['calc_charge_data'] = csect.getboolean('calc_charge_data', False)
-    dd['charging_current'] = csect.getint('charging_current', 10)
-
-
-    # list() options that may override common config:
-    for overrides in ['one_to_one', 'bulk_report', 'log_items']:
-        option = get_model_specific_config(device, overrides)
-        if option:
-            dd[overrides] = option.split()
-
-    if problems:
-        print(f'Device {device} has problems: {problems}', file=sys.stderr)
+    dev_sect_name = 'power.' + dev_id
+    if dev_sect_name not in GLOBAL_CONFIG:
+        print(f'ERROR: no device section {dev_sect_name} found in the config')
         return False
 
-    ps = get_model_specific_config(device, 'perma_storage', '')
-    if dd['batt_type'] == 'pb':  # if path is empty, the load/save will silently fail
-        dd['statobj'] = KBattLead(ps, dd)
-    else:
-        dd['statobj'] = KBattStats(ps, dd)
+    kpd = DEVICES[dev_id] = KPowerDevice(dev_id, GLOBAL_CONFIG)
+
+    if kpd.init_errors > 0:
+        print(f'ERROR: device {dev_id} has errors setting up: ', kpd.collect_messages())
+        return False
 
     if ARGS.debug:
-        print(f'+ Device {device} initilized')
+        if kpd.init_warnings > 0:
+            print(f'+ Device {dev_id} initialized with warnings:\n    ' + '\n    '.join(kpd.collect_messages()))
+        else:
+            print(f'+ Device {dev_id} initialized')
 
     return True
 
 
 ########################################
-def get_data_from_upsc(device: str) -> dict:
+def get_data_from_upsc(dev_id: str) -> dict:
     """
     Collects data from upsc output for given device.
-    :param device:
+    :param dev_id:
     :return: dict("model":"manufacturer model", "data":dict(attribute:val))
     """
-    global ARGS, CONFIG, DEVICES, stats_vf
+    global ARGS, DEVICES, stats_vf
 
-    to_return = {"model": "", "errors": "",
-                 "data": {},  # attributes values will be here
+    data: dict[str, Any] = {}
+    to_return: dict[str, Any] = {
+        "model": "", "errors": "",
+        "data": data,  # attributes values will be here
     }
 
-    # initializing the list of minimal attributes that we needed (note '.' replaced by '_')
-    upsc_data_needed = [
-        'device_mfr',  # device.mfr: EATON
-        'device_model',  # device.model: 5E 1500i
-        'device_type',  # device.type: ups
-        'ups_status',  # ups.status: OL
+    # initializing the list of minimal attributes that we need for reports (note '.'s are replaced by '_'s)
+    upsc_attributes_needed = [
+        'device_mfr',  # manufacturer
+        'device_model',
+        'device_type',  # ups
+        'ups_status',  # ups.status: OL/OB or whatever ups may want to report
     ]
 
-    dev_data = DEVICES[device]
+    kpd = DEVICES[dev_id]
     # adding user-defined properties
-    if 'one_to_one' in CONFIG:
-        for pair in CONFIG.get('one_to_one').split():
+    if kpd.one_to_one:
+        for pair in kpd.one_to_one:
             oto_attr, oto_topic = pair.split(':')
-            upsc_data_needed.append(oto_attr)
+            upsc_attributes_needed.append(oto_attr)
 
-    if 'bulk_report' in dev_data:
-        to_return['bulk_report'] = dev_data['bulk_report']
-        upsc_data_needed += to_return['bulk_report']
+    if kpd.bulk_report:
+        to_return['bulk_report'] = ' '.join(kpd.bulk_report)
+        upsc_attributes_needed += to_return['bulk_report']
 
-    to_return['need'] = upsc_data_needed  # indicating what we intended to collect here
+    # to_return['upsc_attributes_needed'] = upsc_attributes_needed  # indicating what we intended to collect here
 
-    upsc_bin = ['upsc', device]
-    if 'upsc_binary' in CONFIG:
-        upsc_bin = CONFIG.get('upsc_binary').replace('$device', device).split()
+    upsc_bin = ['upsc', dev_id]
+    if 'upsc_binary' in GLOBAL_CONFIG:
+        upsc_bin = GLOBAL_CONFIG.get('upsc_binary').replace('$device', dev_id).split()
 
-    upsc = subprocess.Popen(upsc_bin,
+    upsc_proc = subprocess.Popen(upsc_bin,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=(None if ARGS.debug else subprocess.DEVNULL), text=True)
 
-    if upsc.poll():
-        if upsc.returncode > 0:
-            to_return["errors"] = '"upsc error":"ended with rc: ' + str(upsc.returncode) + '"'
+    if upsc_proc.poll():
+        if upsc_proc.returncode > 0:
+            to_return["errors"] = '"upsc error":"ended with rc: ' + str(upsc_proc.returncode) + '"'
             print(to_return["errors"])
         return to_return
 
-    out, err = upsc.communicate()  # communicate() will return all output at once
+    out, err = upsc_proc.communicate()  # communicate() will return all output at once
 
     if err and (err != ''):
         to_return["errors"] = '"upsc error":"' + err + "'"
@@ -350,32 +224,27 @@ def get_data_from_upsc(device: str) -> dict:
         return to_return
 
     for report_line in out.splitlines():
-        # attributes array?
+        # attribute?
         rm = re.match(r'([\w.]+):\s+(.+)', report_line)
         if not rm:
             continue
 
         attribute_name = rm.group(1).replace('.', '_')
-        value = rm.group(2).strip()
 
-        if attribute_name not in upsc_data_needed:
+        if attribute_name not in upsc_attributes_needed:
             continue
 
-        to_return['data'][attribute_name] = value
+        data[attribute_name] = rm.group(2).strip()
 
     # do some stats
     try:
         t = time.localtime()
 
-        v = float(to_return['data']['input_voltage'])
-        f = float(to_return['data']['input_frequency']) \
-            if 'input_frequency' in to_return['data'] else 0.0
-        if f == 0.0:
-            f = float(to_return['data']['output_frequency']) \
-                if 'output_frequency' in to_return['data'] else 0.0
+        v = float(data['input_voltage'])
+        f = float(data.get('input_frequency', data.get('output_frequency', 0.0 )))
 
-        if device not in stats_vf:  # init
-            stats_vf[device] = {
+        if dev_id not in stats_vf:  # init
+            stats_vf[dev_id] = {
                 'blackouts': 0, 'bo_time': 0, 'in_bo': False,
                 'mstart': 0, 'm_v_mean': 0, 'mv': 0.0,  # minute
                 'mf': 0, 'm_f_mean': 0, 'msamples': 0,
@@ -385,35 +254,35 @@ def get_data_from_upsc(device: str) -> dict:
                 'df': 0, 'd_f_mean': 0, 'dsamples': 0
             }
 
-        update_vf_stats(device, 'm', t.tm_min, v, f)
-        update_vf_stats(device, 'h', t.tm_hour, v, f)
-        update_vf_stats(device, 'd', t.tm_mday, v, f)
+        update_vf_stats(dev_id, 'm', t.tm_min, v, f)
+        update_vf_stats(dev_id, 'h', t.tm_hour, v, f)
+        update_vf_stats(dev_id, 'd', t.tm_mday, v, f)
 
-        to_return['data']['voltage_mean_minute'] = stats_vf[device]['m_v_mean']
-        to_return['data']['frequency_mean_minute'] = stats_vf[device]['m_f_mean']
+        data['voltage_mean_minute'] = stats_vf[dev_id]['m_v_mean']
+        data['frequency_mean_minute'] = stats_vf[dev_id]['m_f_mean']
 
-        to_return['data']['voltage_mean_hour'] = stats_vf[device]['h_v_mean']
-        to_return['data']['frequency_mean_hour'] = stats_vf[device]['h_f_mean']
+        data['voltage_mean_hour'] = stats_vf[dev_id]['h_v_mean']
+        data['frequency_mean_hour'] = stats_vf[dev_id]['h_f_mean']
 
-        to_return['data']['voltage_mean_day'] = stats_vf[device]['d_v_mean']
-        to_return['data']['frequency_mean_day'] = stats_vf[device]['d_f_mean']
+        data['voltage_mean_day'] = stats_vf[dev_id]['d_v_mean']
+        data['frequency_mean_day'] = stats_vf[dev_id]['d_f_mean']
 
-        to_return['data']['blackouts'] = stats_vf[device]['blackouts']
-        to_return['data']['time_in_blackouts'] = stats_vf[device]['bo_time']
+        data['blackouts'] = stats_vf[dev_id]['blackouts']
+        data['time_in_blackouts'] = stats_vf[dev_id]['bo_time']
     except Exception:
         pass
 
     # fill in specials:
     # device.mfr: EATON. Some UPS report empty string here
-    if 'device_mfr' in to_return['data'] and to_return['data']['device_mfr'] != "":
-        to_return['model'] = to_return['data']['device_mfr']
+    if 'device_mfr' in data and data['device_mfr'] != "":
+        to_return['model'] = data['device_mfr']
     else:
-        to_return['model'] = get_model_specific_config(device, ".mfr", "UNSPECIFIED MFR")
+        to_return['model'] = get_model_specific_config(dev_id, ".mfr", "UNSPECIFIED MFR")
 
-    if 'device_model' in to_return['data'] and to_return['data']['device_model']:
-        to_return['model'] += ' ' + to_return['data']['device_model']
+    if 'device_model' in data and data['device_model']:
+        to_return['model'] += ' ' + data['device_model']
     else:
-        to_return['model'] += ' ' + get_model_specific_config(device, ".model", "")
+        to_return['model'] += ' ' + get_model_specific_config(dev_id, ".model", "")
 
     return to_return
 
@@ -425,72 +294,72 @@ def check_nut() -> bool:
     Default function to run on invocation of this script.
     :return: bool - False in case of trouble
     """
-    global ARGS, CONFIG, DEVICES, log_items, Sender, stats_vf
+    global ARGS, DEVICES, Sender, stats_vf
 
-    for device in DEVICES:
-        dev_topic = CONFIG['device_topic'].replace('$device', device)
+    for dev_id in DEVICES:
+        CONFIG = GLOBAL_CONFIG['power.' + dev_id]
+        dev_topic = CONFIG['device_topic'].replace('$device', dev_id)
 
         if ARGS.debug:
-            print('device:', device, 'topic:', dev_topic)
+            print('device:', dev_id, 'topic:', dev_topic)
 
-        report_on_upsc = get_data_from_upsc(device)
+        report_on_upsc = get_data_from_upsc(dev_id)
+        repdata = report_on_upsc['data']
 
+        kpd = DEVICES[dev_id]
         # run stat updates first, because it will compute some things we'll need here
-        dd = DEVICES[device]
-        dd['statobj'].update_stats(report_on_upsc['data'])
-        if 'stats_save' not in dd or dd['stats_save'] < time.time():
-            if dd['statobj'].file_save():
-                dd['stats_save'] = time.time() + 600.0
+        kpd.process_upsc_data( repdata )
+        if kpd.next_stats_save < time.time():
+            if kpd.stats_file_save():
+                kpd.next_stats_save = time.time() + 600.0
             else:
-                dd['stats_save'] = time.time() + 3600.0  # in case of errors, postpone next save
+                kpd.next_stats_save = time.time() + 3600.0  # in case of errors, postpone next save
 
-        report_on_upsc['data']['batteries'] = battrep = {}
-        for b in dd['statobj'].get_batteries_list():
-            h = dd['statobj'].get_battery_health(b)
-            battrep[b] = {
-                'charge': dd['statobj'].get_battery_charge(b),
+        repdata['batteries'] = battrep = {}
+        for battname in kpd.batteries.get_list():
+            b = kpd.batteries[battname]
+            h = b.get_battery_health()
+            battrep[battname] = {
+                'charge': b.charge,
                 'health': h['status']
             }
 
         # WARNING! Past this point, upsc data will be replaced with normalized data!
-        report_on_upsc['data']['runtimes'] = dd['statobj'].get_battery_runtime()
-        report_on_upsc['data']['ups_load'] = dd['statobj'].get_load_in_watts(report_on_upsc['data'])
+        repdata['runtimes'] = kpd.get_battery_runtime()
+        repdata['ups_load'] = kpd.commons.last_load
 
-        if dd['calc_charge_data']:
-            avgcharge = 0.0
-            for bname in battrep.keys():
-                avgcharge += battrep[bname]['charge']
-            avgcharge = avgcharge / len(battrep)
-            report_on_upsc['data']['battery_charge'] = str(avgcharge)
-            report_on_upsc['data']['battery_runtime'] = str(report_on_upsc['data']['runtimes'][3])
+        if kpd.commons.calc_charge_data:
+            rp = kpd.batteries.get_remaining_power()
+            repdata['battery_charge'] = str(round(rp[1], 1))
 
         # we will count the configured checks to report if none were enabled actually
         checks_run = 0
         checks_with_errors = 0
 
         # this will be sent last and be updated by other analysis code on the way
-        report_on_upsc['data']['model'] = report_on_upsc['model']
-        report_on_upsc['data']['errors'] = report_on_upsc['errors']
-        bulk_msg = json.dumps(report_on_upsc['data'], sort_keys=True, indent=0)
+        repdata['model'] = report_on_upsc['model']
+        repdata['errors'] = report_on_upsc['errors']
+
+        bulk_msg = json.dumps(repdata, sort_keys=True, indent=0)
 
         # --------------------------------
         if 'log_samples' in CONFIG:
-            log_name = CONFIG['log_samples'].replace('$device', device)
+            log_name = CONFIG['log_samples'].replace('$device', dev_id)
             try:
                 time_str = time.strftime(r'%Y-%m-%d %H:%M:%S')
 
                 line = ''
-                if len(log_items) > 0:  # a subset of data requested
-                    for k in log_items:
-                        if k and k not in report_on_upsc['data']:
-                            line += time_str + ' WARNING! upsc does not provide item "' + k + '"\n'
-                            log_items[log_items.index(k)] = None
+                if kpd.log_items:  # a subset of data requested
+                    for ki in range(len(kpd.log_items)):
+                        if kpd.log_items[ki] not in repdata:
+                            line += time_str + ' WARNING! upsc does not provide item "' + kpd.log_items[ki] + '"\n'
+                            kpd.log_items[ki] = None
 
                     line += time_str + ' { "date":"' + time_str + '"'
 
-                    for k in log_items:
-                        if k:
-                            line += ', "' + k + '":"' + str(report_on_upsc['data'][k]) + '"'
+                    for li in kpd.log_items:
+                        if li:
+                            line += ', "' + li + '":"' + str(repdata[li]) + '"'
 
                     line += ' }\n'
 
@@ -506,7 +375,7 @@ def check_nut() -> bool:
         # if 'log_samples' in config
 
         # is it time to post new data?
-        next_rep = device + '_next_report'
+        next_rep = dev_id + '_next_report'
 
         if (next_rep in stats_vf) and stats_vf[next_rep] > time.time():  # too soon to report?
             continue
@@ -514,13 +383,13 @@ def check_nut() -> bool:
         stats_vf[next_rep] = time.time() + float(CONFIG['report_interval'])
 
         # quick post one-to-one data
-        if 'one_to_one' in CONFIG:
-            for pair in CONFIG.get('one_to_one').split():
+        if kpd.one_to_one:
+            for pair in kpd.one_to_one:
                 oto_attr, oto_topic = pair.split(':')
                 checks_run += 1
 
-                if oto_attr in report_on_upsc['data']:
-                    msg = str(report_on_upsc['data'][oto_attr])
+                if oto_attr in repdata:
+                    msg = str(repdata[oto_attr])
                 else:
                     if oto_attr in ['ups_alarm']:
                         msg = 'OK'
@@ -531,11 +400,11 @@ def check_nut() -> bool:
                 Sender.send_json_short(dev_topic + '/' + oto_topic, msg, retain=True)
 
         # finally sending general status message
-        if report_on_upsc['errors'] != '' or ('ups_status' not in report_on_upsc['data']):
+        if report_on_upsc['errors'] != '' or ('ups_status' not in repdata):
             msg = report_on_upsc['errors']
             checks_with_errors += 1
         else:
-            msg = report_on_upsc['data']['ups_status']
+            msg = repdata['ups_status']
 
         checks_run += 1
 
@@ -558,7 +427,7 @@ def check_nut() -> bool:
 ####################################################
 # MAIN
 parser = argparse.ArgumentParser(
-    description='Collecting power supply info and passing it to mqtt agent. V2.6.2.'
+    description='Collecting uninterruptible power device info and passing it to mqtt agent. V2.7.0.'
                 ' Created by Andrej Pakhutin - pakhutin at gmail.'
     )
 parser.add_argument('-c', '--config', dest='config_path', action='store', default=DEFAULT_CONFIG_FILE,
@@ -572,7 +441,8 @@ parser.add_argument('action', nargs='?', default='', help='non-default action na
 
 ARGS = parser.parse_args()
 
-CONFIG = load_config(ARGS.config_path)
+load_config(ARGS.config_path)
+DEF_CONF: SectionProxy = GLOBAL_CONFIG['DEFAULT']
 
 # mqtt sender script tend to hang up (why no SIGPIPE on stdin read?) if we exit hastily.
 # Try to avoid this.
@@ -582,44 +452,39 @@ signal.signal(signal.SIGTERM, handle_termination)
 hba = socket.gethostbyaddr(socket.gethostname())
 hostname = re.sub(r'\..+', '', hba[0])
 
-Sender = KMQTT(CONFIG['sender'], True, ARGS.debug)
+Sender = KMQTT(DEF_CONF['sender'], True, ARGS.debug)
 
 if ARGS.debug:
     if not Sender:
         sys.exit(1)
 
 Dates_json = ''  # will hold reusable date/timestamp JSON
-queue = []  # action list to run through
+action_list = []  # action list to run through
 stats_vf = {}  # statistics about voltage and frequency
-
-# pre-caching the list of items to put in the log
-log_items: list[str] = []
-if 'log_items' in CONFIG:
-    log_items.extend(CONFIG.get('log_items').split())
 
 ##################################
 # set necessary defaults
-if 'sample_interval' not in CONFIG:
+if 'sample_interval' not in DEF_CONF:
     if ARGS.loop > 0:
-        CONFIG['sample_interval'] = str(ARGS.loop)
+        DEF_CONF['sample_interval'] = str(ARGS.loop)
     else:
-        CONFIG['sample_interval'] = '60'  # seconds
+        DEF_CONF['sample_interval'] = '60'  # seconds
 
-if 'report_interval' not in CONFIG:
-    CONFIG['report_interval'] = CONFIG['sample_interval']
+if 'report_interval' not in DEF_CONF:
+    DEF_CONF['report_interval'] = DEF_CONF['sample_interval']
 
 ##################################
 # Which functions should we run. default is check_nut
 if ARGS.action != '':
-    queue.append(ARGS.action)
+    action_list.append(ARGS.action)
 else:
-    queue = [check_nut]
+    action_list = [check_nut]
 
 problems = False
 # pre-initializing device data for NUT interface
-if check_nut in queue:
-    if 'devices' in CONFIG:
-        dev_list = CONFIG['devices'].split()
+if check_nut in action_list:
+    if 'devices' in DEF_CONF:
+        dev_list = DEF_CONF['devices'].split()
     else:
         if ARGS.debug:
             print('requesting the list of devices from upsc')
@@ -637,7 +502,7 @@ while not problems:  # main loop
     Dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
     Dates_json = Dates_json.replace(r'"', r'\"')
 
-    for func in queue:
+    for func in action_list:
         if not func():
             problems = True
             break
@@ -645,10 +510,10 @@ while not problems:  # main loop
     if problems:
         break
 
-    if int(CONFIG['sample_interval']) <= 0:
+    if int(DEF_CONF['sample_interval']) <= 0:
         break
 
-    time.sleep(int(CONFIG['sample_interval']))
+    time.sleep(int(DEF_CONF['sample_interval']))
 
 if problems:
     print("! Exitting due to critical problems")
