@@ -198,9 +198,7 @@ def get_data_from_upsc(dev_id: str) -> dict:
 
     if kpd.bulk_report:
         to_return['bulk_report'] = ' '.join(kpd.bulk_report)
-        upsc_attributes_needed += to_return['bulk_report']
-
-    # to_return['upsc_attributes_needed'] = upsc_attributes_needed  # indicating what we intended to collect here
+        upsc_attributes_needed.extend( kpd.bulk_report )
 
     upsc_bin = ['upsc', dev_id]
     if 'upsc_binary' in GLOBAL_CONFIG:
@@ -297,8 +295,8 @@ def check_nut() -> bool:
     global ARGS, DEVICES, Sender, stats_vf
 
     for dev_id in DEVICES:
-        CONFIG = GLOBAL_CONFIG['power.' + dev_id]
-        dev_topic = CONFIG['device_topic'].replace('$device', dev_id)
+        dev_conf = GLOBAL_CONFIG['power.' + dev_id]
+        dev_topic = dev_conf['device_topic'].replace('$device', dev_id)
 
         if ARGS.debug:
             print('device:', dev_id, 'topic:', dev_topic)
@@ -343,8 +341,8 @@ def check_nut() -> bool:
         bulk_msg = json.dumps(repdata, sort_keys=True, indent=0)
 
         # --------------------------------
-        if 'log_samples' in CONFIG:
-            log_name = CONFIG['log_samples'].replace('$device', dev_id)
+        if 'log_samples' in dev_conf:
+            log_name = dev_conf['log_samples'].replace('$device', dev_id)
             try:
                 time_str = time.strftime(r'%Y-%m-%d %H:%M:%S')
 
@@ -369,7 +367,7 @@ def check_nut() -> bool:
                 open(log_name, mode='a').writelines(line)
 
             except Exception:
-                del CONFIG['log_samples']
+                del dev_conf['log_samples']
                 print('! Error writing log file: ', log_name, ':',
                       sys.exc_info()[0], file=sys.stderr)
         # if 'log_samples' in config
@@ -380,7 +378,7 @@ def check_nut() -> bool:
         if (next_rep in stats_vf) and stats_vf[next_rep] > time.time():  # too soon to report?
             continue
 
-        stats_vf[next_rep] = time.time() + float(CONFIG['report_interval'])
+        stats_vf[next_rep] = time.time() + float(dev_conf['report_interval'])
 
         # quick post one-to-one data
         if kpd.one_to_one:
@@ -408,10 +406,10 @@ def check_nut() -> bool:
 
         checks_run += 1
 
-        Sender.send_json_short(dev_topic + '/' + CONFIG['state_topic'], msg, retain=True)
+        Sender.send_json_short(dev_topic + '/' + dev_conf['state_topic'], msg, retain=True)
 
         # sending time stats
-        Sender.send_json_short(dev_topic + '/' + CONFIG['updated_topic'], Dates_json, retain=True)
+        Sender.send_json_short(dev_topic + '/' + dev_conf['updated_topic'], Dates_json, retain=True)
 
         # doing bulk report message. we'll use 'mpublish' posting method, so no quoting is needed
         stop_word = '25@5h256h256H'
