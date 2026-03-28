@@ -502,6 +502,7 @@ class TestKBattLead(unittest.TestCase):
         self.assertIn('Trash', bdh['status'])
 
         # 2. From weekly data
+        kb._pdata['weekly']['start_ts'][0] -= kpu.SECONDS_IN_A_WEEK + 1
         kb._weekly_shift()  # +1 week
         # reset cycles to more relaxed state
         pd['health']['cycles'] = [300, 200, 10]  # 1-300/6000-200/3000-10/500 == 0.86

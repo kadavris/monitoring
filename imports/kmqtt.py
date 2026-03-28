@@ -68,20 +68,21 @@ class KMQTT:
     ########################################
     def terminate(self) -> None:
         """Ending the session, despawning sender process"""
-        try:
-            self._pipe.communicate(input='\n\n{ "cmd":"exit" }\n')
-        except:
-            pass
+        if self._pipe:
+            try:
+                self._pipe.communicate(input='\n\n{ "cmd":"exit" }\n')
+            except:
+                pass
 
-        try:
-            self._pipe.wait(timeout=5.0)
-        except:
-            pass
+            try:
+                self._pipe.wait(timeout=5.0)
+            except:
+                pass
 
-        try:
-            self._pipe.terminate()
-        except:
-            pass
+            try:
+                self._pipe.terminate()
+            except:
+                pass
 
         self._pipe = None
 

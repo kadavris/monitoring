@@ -1,3 +1,6 @@
+"""kadpy.kbatteries: This module is a part of the hardware monitoring toolset from GitHub/kadavris/monitoring.
+Electric batteries list management.
+Made by Andrej Pakhutin"""
 from configparser import ConfigParser
 from kadpy.kbattstats import KBattStats
 from kadpy.kbattlead import KBattLead
@@ -5,9 +8,7 @@ from kadpy.kpowerutils import KPowerDeviceCommons
 
 
 class KBatteries:
-    """
-    Wrapper class for providing aggregate data from all connected batteries
-    """
+    """Wrapper class for providing aggregate data from all connected batteries"""
     def __init__(self, dev_commons: KPowerDeviceCommons, config: ConfigParser, old_stats: dict | None) -> None:
         self.capacity_wh: int = 0  # total capacity for all connected batteries
         self.commons = dev_commons
@@ -55,28 +56,27 @@ class KBatteries:
                 self.messages.append(f'ERROR: config section "{batt_sect_name}" has invalid battery type')
                 continue
 
-            if self._batteries[-1].invalid:
-                self.messages.extend(self._batteries[-1].messages)
-            else:
-                self.capacity_wh += self._batteries[-1].capacity_wh
+            if self._batteries:
+                if self._batteries[-1].invalid:
+                    self.messages.extend(self._batteries[-1].messages)
+                else:
+                    self.capacity_wh += self._batteries[-1].capacity_wh
 
         if old_stats is not None:  # purging our own info from old stats, while checking if there are extra data
             if old_stats_batdict is not None:
                 for bid in old_stats_batdict.keys():
                     self.messages.append(f'NOTE: stats file has an extra batteries section: "{bid}"')
                 del old_stats['batteries']
-            else:
-                self.messages.append('WARNING: stats file is missing "batteries" section')
+        # missing "batteries" section is not an error - it's a sign of a fresh new setup with no saved stats
 
 
     ########################################
-    def __getitem__(self, index: str) -> KBattStats:
-        return self.by_id(index)
+    def __getitem__(self, _id: str) -> KBattStats | None:
+        """Returns a battery object by its ID
+        :param _id: battery name
+        :return: KBattStats object or None
+        """
 
-
-    ########################################
-    def by_id(self, _id: str) -> KBattStats | None:
-        """Returns a battery object by its ID"""
         for b in self._batteries:
             if b.id == _id:
                 return b
@@ -101,18 +101,14 @@ class KBatteries:
 
 
     ########################################
-    def stats_file_append(self, file) -> None:
-        """Append local info as JSON to the file being saved"""
-        file.write('\n"batteries":{\n')
-        add_comma = False
+    def get_permastats(self) -> dict:
+        """Returns a copy of internal perma stats dictionary,
+         prepared to be incorporated into save file"""
+        to_ret: dict = { 'batteries': { } }
         for b in self._batteries:
-            b.stats_file_append(file)
-            if add_comma:
-                file.write(',\n')
-            else:
-                add_comma = True
+            to_ret['batteries'].update(b.get_permastats())
 
-        file.write('}\n')
+        return to_ret
 
 
     ########################################

@@ -62,14 +62,14 @@ class TestKPowerDevice(unittest.TestCase):
         conf = ConfigParser()
         conf.read_dict({
             'DEFAULT': {},
-            'power': {
+            'power.blackbox': {
                 'one_to_one': 'attr1:topic1 attr2:topic2 attr3:topic3',
                 'bulk_report': 'bulk_report1 bulk_report2 bulk_report3',
                 'perma_storage': self.tmpdir,
             }})
         kpd = KPowerDevice('blackbox', conf)
         self.assertEqual(3, len(kpd.bulk_report))
-        self.assertIs(None, kpd.log_items)
+        self.assertEqual(0, len(kpd.log_items))
         # kpd._messages
         self.assertEqual(3, len(kpd.one_to_one))
 
@@ -95,7 +95,7 @@ class TestKPowerDevice(unittest.TestCase):
         kpd = KPowerDevice('lead', conf)
 
         self.assertEqual(2, len(kpd.bulk_report))  # override
-        self.assertIs(None, kpd.log_items)
+        self.assertEqual(0, len(kpd.log_items))
         # kpd._messages
         self.assertEqual(4, len(kpd.one_to_one))  # override
 
@@ -248,20 +248,43 @@ class TestKPowerDevice(unittest.TestCase):
 
 
     ################################################
-    def test_weekly_shift(self):
-        """_weekly_shift inserts a new week and keeps the list at max length."""
+    def test_weekly_shift_init(self):
+        """_weekly_shift try to insert a new week while still in same time range."""
         conf = ConfigParser()
         conf.read_dict(self.tpl_config)
         kpd = KPowerDevice(self.tpl_dev_id, conf)
 
         t = int(time.time())
-        # Insert two additional weeks (we have one initially)
-        kpd._weekly_shift()  # 1st shift
-        kpd._weekly_shift()  # 2nd shift
+        # try to insert two additional weeks - should still be one
+        kpd._weekly_shift()
+        kpd._weekly_shift()
 
-        # The start_ts list should have two entries in front
+        self.assertEqual(1, len(kpd._pdata['weekly']['start_ts']))
         self.assertGreaterEqual(1, kpd._pdata['weekly']['start_ts'][0] - t)
-        self.assertGreaterEqual(1, kpd._pdata['weekly']['start_ts'][1] - t)
+
+        # All other lists must also have the same length of 3 weeks
+        for key, lst in kpd._pdata['weekly'].items():
+            self.assertEqual(1, len(lst))
+
+
+    ################################################
+    def test_weekly_shift_new(self):
+        """_weekly_shift inserts 2 new weeks and keeps the list at max length."""
+        conf = ConfigParser()
+        conf.read_dict(self.tpl_config)
+        kpd = KPowerDevice(self.tpl_dev_id, conf)
+
+        t = int(time.time())
+
+        # artificially shift week start
+        kpd._pdata['weekly']['start_ts'][0] -= 2 * (kpu.SECONDS_IN_A_WEEK + 1)
+        # try to insert two additional weeks
+        kpd._weekly_shift()
+        kpd._pdata['weekly']['start_ts'][0] -= kpu.SECONDS_IN_A_WEEK + 1
+        kpd._weekly_shift()
+
+        self.assertEqual(3, len(kpd._pdata['weekly']['start_ts']))
+        self.assertGreaterEqual(1, kpd._pdata['weekly']['start_ts'][0] - t)
 
         # All other lists must also have the same length of 3 weeks
         for key, lst in kpd._pdata['weekly'].items():
@@ -271,6 +294,7 @@ class TestKPowerDevice(unittest.TestCase):
         # We simulate many shifts to exceed that limit
         for _ in range(kpu.WEEKS_IN_A_YEAR + 5):
             kpd._weekly_shift()
+            kpd._pdata['weekly']['start_ts'][0] -= 2 * kpu.SECONDS_IN_A_WEEK  # for it looks like old
 
         for key, lst in kpd._pdata['weekly'].items():
             self.assertLessEqual(kpu.WEEKS_IN_A_YEAR, len(lst))
@@ -288,9 +312,16 @@ class TestKPowerDevice(unittest.TestCase):
             'ups': {},
             'batteries': {
                 self.tpl_batt_id: {
+                    'registered': [1, 'Somewhere in time'],
                     'type': 'bt_lead',
-                    'vnom': '48',
-                    'capacity_ah': '100',
+                    'vnom': 48,
+                    'capacity_ah': 100,
+                    'health': {
+                        'cycles': [0, 0, 0],
+                        'status': "OK",
+                        'tbf': -1,
+                        'wellness': 100,
+                    },
                     'weekly': {
                         'start_ts': [123],
                         'discharge_speed_avg': [[0.5] * kpu.CHARGE_STEPS],
@@ -309,6 +340,7 @@ class TestKPowerDevice(unittest.TestCase):
             },
         }
 
+        t = int(time.time())
         #  check if we follow the same protocol everywhere
         self._validate_pdata_structure( saved, 1 )
 
@@ -320,10 +352,11 @@ class TestKPowerDevice(unittest.TestCase):
 
         kpd = KPowerDevice( self.tpl_dev_id, conf )
 
-        self.assertEqual( 0, kpd.init_errors, kpd._messages )
+        self.assertEqual( 0, kpd.init_errors, kpd.collect_messages() )
         self.assertEqual( 0, kpd.init_warnings, kpd._messages )
-        self.assertEqual( 123, kpd._pdata['weekly']['start_ts'][0])
-        self._validate_pdata_structure( kpd._pdata, 1 )
+        self.assertGreaterEqual( t, kpd._pdata['weekly']['start_ts'][0])
+        self.assertEqual( 123, kpd._pdata['weekly']['start_ts'][1])
+        self._validate_pdata_structure( kpd._pdata, 2 )
 
 
     ################################################

@@ -87,7 +87,6 @@ class TestKBattStats(unittest.TestCase):
         # Protocol sanity checks: tops
         struct_tpl = {
             'registered': [],
-            'messages': [],
             'type': '',
             'vnom': 0,
             'capacity_ah': 0,
@@ -171,8 +170,7 @@ class TestKBattStats(unittest.TestCase):
 
 
     ################################################
-    @mock.patch('time.time', return_value=1_000_000)
-    def test_init_with_matching_json(self, mock_time):
+    def test_init_with_matching_json(self):
         """If a matching JSON provided it is loaded correctly.
         Thorough validation is always performed by the descendant classes"""
         t = int(time.time())
@@ -218,7 +216,8 @@ class TestKBattStats(unittest.TestCase):
         self.assertEqual( 48, kb.v_nom )
 
         # Though JSON is imported
-        self.assertEqual( 123, kb._pdata['weekly']['start_ts'][0] )
+        self.assertGreaterEqual( t, kb._pdata['weekly']['start_ts'][0] )
+        self.assertEqual( 123, kb._pdata['weekly']['start_ts'][1] )
 
 
     ################################################
@@ -299,7 +298,32 @@ class TestKBattStats(unittest.TestCase):
 
 
     ################################################
-    def test_weekly_shift(self):
+    def test_weekly_shift_init(self):
+        """_weekly_shift try to insert a new week while still in same time range."""
+        conf_init = copy.deepcopy( self.tpl_config )
+        conf_init['battery.' + self.tpl_batt_id] = copy.deepcopy( self.tpl_config_battery )
+
+        conf = ConfigParser()
+        conf.read_dict( conf_init )
+        comm = make_commons( self.tpl_dev_id )
+
+        kb = KBattStats( self.tpl_batt_id, comm, conf, None )
+
+        t = int(time.time())
+        # try to insert two additional weeks - should still be one
+        kb._weekly_shift()
+        kb._weekly_shift()
+
+        self.assertEqual(1, len(kb._pdata['weekly']['start_ts']))
+        self.assertGreaterEqual(1, kb._pdata['weekly']['start_ts'][0] - t)
+
+        # All other lists must also have the same length of 3 weeks
+        for key, lst in kb._pdata['weekly'].items():
+            self.assertEqual(1, len(lst))
+
+
+    ################################################
+    def test_weekly_shift_new(self):
         """_weekly_shift inserts a new week and keeps the list at max length."""
         conf_init = copy.deepcopy( self.tpl_config )
         conf_init['battery.' + self.tpl_batt_id] = copy.deepcopy( self.tpl_config_battery )
@@ -311,13 +335,16 @@ class TestKBattStats(unittest.TestCase):
         kb = KBattStats( self.tpl_batt_id, comm, conf, None )
 
         t = int(time.time())
-        # Insert two additional weeks (we have one already)
-        kb._weekly_shift()  # 1st shift
-        kb._weekly_shift()  # 2nd shift
 
-        # The start_ts list should have two entries in front
-        self.assertGreaterEqual(5, kb._pdata['weekly']['start_ts'][0] - t )
-        self.assertGreaterEqual(5, kb._pdata['weekly']['start_ts'][1] - t )
+        # artificially shift week start
+        kb._pdata['weekly']['start_ts'][0] -= 2 * (kpu.SECONDS_IN_A_WEEK + 1)
+        # try to insert two additional weeks
+        kb._weekly_shift()
+        kb._pdata['weekly']['start_ts'][0] -= kpu.SECONDS_IN_A_WEEK + 1
+        kb._weekly_shift()
+
+        self.assertEqual(3, len(kb._pdata['weekly']['start_ts']))
+        self.assertGreaterEqual(1, kb._pdata['weekly']['start_ts'][0] - t)
 
         # All other lists must also have the same length of 3 weeks
         for key, lst in kb._pdata['weekly'].items():
@@ -326,7 +353,9 @@ class TestKBattStats(unittest.TestCase):
         # Verify that the weekly lists are truncated at WEEKS_IN_A_YEAR
         # We simulate many shifts to exceed that limit
         for _ in range(kpu.WEEKS_IN_A_YEAR + 5):
+            kb._pdata['weekly']['start_ts'][0] -= 2 * kpu.SECONDS_IN_A_WEEK  # for it looks like old
             kb._weekly_shift()
+
         for key, lst in kb._pdata['weekly'].items():
             self.assertLessEqual( kpu.WEEKS_IN_A_YEAR, len(lst) )
 

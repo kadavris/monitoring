@@ -1,4 +1,8 @@
-from configparser import ConfigParser, SectionProxy
+"""kadpy.kpowerutils: This module is a part of the hardware monitoring toolset from GitHub/kadavris/monitoring.
+Miscellaneous utilities for dealing with electricity-related things.
+Made by Andrej Pakhutin"""
+
+from configparser import SectionProxy
 from dataclasses import dataclass
 from enum import Enum
 
@@ -84,7 +88,7 @@ def bt_from_str(val: str) -> KBatteryTypes:
 
 
 ########################################
-def to_watts(val: float, val_unit: KPowerUnits, dev_rating: float, dev_rating_unit: KPowerUnits) -> float:
+def to_watts(val: float, val_unit: KPowerUnits | None, dev_rating: float, dev_rating_unit: KPowerUnits) -> float:
     """convert power-related value to watts"""
     if val_unit == KPowerUnits.W:
         return val
@@ -104,9 +108,15 @@ def to_watts(val: float, val_unit: KPowerUnits, dev_rating: float, dev_rating_un
 
 ########################################
 def config_parse_power_option(csect: SectionProxy, name: str,
-                              def_unit: KPowerUnits) -> tuple[float | None, KPowerUnits | None]:
+                              def_unit: KPowerUnits) -> tuple[float | None, KPowerUnits ]:
+    """Prosess options of the kind: value,unit_of_measurement
+    :param csect: config section ref
+    :param name: option's name
+    :param def_unit: default unit to use if not specified
+    :return: (value, unit): (None, INVALID) if no option in config, (-1, INV) if value is borked
+    """
     if name not in csect:
-        return None, None
+        return None, KPowerUnits.INVALID
 
     if -1 == csect[name].find(','):
         if csect[name][-1].lower() in '%pvw':  # percent, volt, watt

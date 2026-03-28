@@ -1,8 +1,12 @@
+"""kadpy.kpowerdevice: This module is a part of the hardware monitoring toolset from GitHub/kadavris/monitoring.
+Uninterruptible power device related things. Made by Andrej Pakhutin"""
+
+import copy
 import json
 import os
 import re
 import time
-from configparser import ConfigParser, SectionProxy
+from configparser import ConfigParser
 from typing import Any, cast
 from kadpy.kbatteries import KBatteries
 import kadpy.kpowerutils as kpu
@@ -11,7 +15,10 @@ from kadpy.kpowerutils import KPowerDeviceCommons
 
 
 class KPowerDevice:
-    """UPS device class for use in mqtt-power daemon"""
+    """UPS device class for use in mqtt-power daemon.
+    After initialization, if any important option is invalid we'll set it to the value,
+    that will be absolutely ridiculous on screen, like negative power or times.
+    That way it is easier for me to catch up on problems, instead on sifting through unfriendly journalctl output"""
     def __init__(self, device_id: str, config: ConfigParser) -> None:
         # init the bare minimum first in case of severe errors
         self.id: str = device_id
@@ -24,32 +31,52 @@ class KPowerDevice:
 
         # properties based on config values
         self.commons = KPowerDeviceCommons(device_id)
-        self.commons.charging_current = dev_sect.getint('charging_current', 10)
-        self.commons.sample_interval = dev_sect.getint('sample_interval', 60)
-        # batteries charging current (Amps) for estimations
-        self.commons.calc_charge_data = dev_sect.getboolean('calc_charge_data', False)
 
-        self.bulk_report: list[str] | None = None # upsc attributes that will be posted in the main topic in bulk
+        try:
+            # batteries charging current (Amps) for estimations
+            self.commons.charging_current = dev_sect.getint('charging_current', 10)
+        except ValueError:
+            self.commons.charging_current = -1
+            self._messages.append("ERROR: Invalid charging_current def")
+
+        try:
+            self.commons.sample_interval = dev_sect.getint('sample_interval', 60)
+
+            if self.commons.sample_interval < 1 or self.commons.sample_interval > 600:
+                self.commons.sample_interval = 60
+                self._messages.append("ERROR: sample_interval out of range (1,60 sec)")
+        except ValueError:
+            self.commons.sample_interval = -1
+            self._messages.append("ERROR: Invalid sample_interval def")
+
+        try:
+            self.commons.calc_charge_data = dev_sect.getboolean('calc_charge_data', False)
+        except ValueError:
+            self.commons.calc_charge_data = False
+            self._messages.append("ERROR: Invalid calc_charge_data def")
+
+        self.bulk_report: list[str]  = []  # upsc attributes that will be posted in the main topic in bulk
         self.in_blackout: bool = False  # we have been on battery for more than 1 status check cycle
         self.next_stats_save: float = time.time()
         self.load_samples: list[int] = [0]  # load levels for the last hour
-        self.log_items: list[str] | None = None # list of items that will be put on log
-        self.one_to_one: list[str] | None = None # upsc attribute -> topic for putting out most important entities
+        self.log_items: list[str] = []  # list of items that will be put on log
+        self.one_to_one: list[str] = []  # upsc attribute -> topic for putting out most important entities
         self.power_rating: int  # normalized to Watts
         self.power_rating_unit: KPowerUnits = KPowerUnits.VA  # default pre-normalized
         self.standard_v: float
 
         # private:
-        self._pdata: dict[str, Any]  # permanent storage data
-        self._load_to_w: float = 1.0  # reported load to Watts conversion factor
+        self._load_to_w: float  # reported load to Watts conversion factor
         self._load_zero: float = 0.0  # for devices that cannot precisely report load less than this value
+
+        # permanent storage data
         self._storage_path = dev_sect.get('perma_storage', '')
         if self._storage_path == '':
             self._file_name = ''
         else:
             self._file_name = os.path.join(self._storage_path, 'mqtt-power.' + device_id + '.json')
 
-        saved_data = self.stats_file_load()
+        self._pdata: dict[str, Any] = self.prepare_permastats()
 
         # -------------------------------
         if 'load_reported_as' in dev_sect:
@@ -63,12 +90,14 @@ class KPowerDevice:
 
         # -------------------------------
         val, lzunit = kpu.config_parse_power_option(dev_sect, 'load_zero', KPowerUnits.W)
-        if val == -1.0:
+        if val is None:  # not in config
+            self._load_zero = 0.0
+            lzunit = KPowerUnits.W
+        elif val == -1.0 or lzunit == kpu.KPowerUnits.INVALID:
             self._messages.append("WARNING: Invalid load_zero def")
             self.init_warnings += 1
             self._load_zero = 0.0
-        elif val is None:  # not in config
-            self._load_zero = 0.0
+            lzunit = KPowerUnits.INVALID
         else:
             self._load_zero = val
 
@@ -103,13 +132,16 @@ class KPowerDevice:
 
         # -------------------------------
         if 'standard_v' in dev_sect:
-            sv = dev_sect['standard_v'].split(',')  # format is V,tolerance%
-
             try:
-                self.standard_v = float(sv[0])
-                if self.standard_v < 100 or self.standard_v > 300:
+                sv, sv_tolerance = dev_sect['standard_v'].split(',')  # format is V,tolerance%
+                self.standard_v = float(sv)
+                if self.standard_v not in [100, 110, 115, 120, 127, 220, 230, 240]:
                     raise ValueError
-            except ValueError:
+
+                sv_tolerance = float(sv_tolerance)
+                if sv_tolerance < 1 or sv_tolerance > 25:
+                    raise ValueError
+            except:
                 self._messages.append("WARNING: Invalid standard_v def")
                 self.init_warnings += 1
                 self.standard_v = -1
@@ -125,20 +157,17 @@ class KPowerDevice:
         if self._load_zero > 0.0 and self.power_rating != -1:
             self._load_zero = kpu.to_watts(self._load_zero, lzunit, self.power_rating, self.power_rating_unit)
 
-        if load_reported_as != KPowerUnits.INVALID or self.power_rating == -1:
+        if load_reported_as != KPowerUnits.INVALID and self.power_rating != -1:
             self._load_to_w = kpu.to_watts(1.0, load_reported_as, self.power_rating, self.power_rating_unit)
         else:
-            self._load_to_w = -1.0
+            self._load_to_w = -1.0  # indicate an error as well
 
         # NOTE: should come after all .commons were initialized:
-        self.batteries = KBatteries(self.commons, config, saved_data)
+        self.batteries = KBatteries(self.commons, config, self._pdata)
         if len(self.batteries.messages) != 0:
             self.init_errors += 1
 
-        # every class down the chain will look up its own saved data, process and erase it from the original package
-        # So in the end there will be only this class data left or stray garbage
-        if saved_data:
-            self._pdata = saved_data
+        self._weekly_shift()  # add new week items to start with
 
 
     ########################################
@@ -170,9 +199,13 @@ class KPowerDevice:
         t = int(time.time())
         w = cast(dict[str, list[Any]], self._pdata['weekly'])  # to shut IDE up
 
-        for k in w:
-            while len(w[k]) >= kpu.WEEKS_IN_A_YEAR:
-                w[k].pop()
+        if len(w['start_ts']) > 0:
+            if w['start_ts'][0] < t - kpu.SECONDS_IN_A_WEEK:  # more than week passed in latest rec
+                for k in w:  # removing oldest recs if needed
+                    while len(w[k]) >= kpu.WEEKS_IN_A_YEAR:
+                        w[k].pop()
+            else:
+                return  # still the same week
 
         w['start_ts'].insert(0, t)
 
@@ -183,6 +216,7 @@ class KPowerDevice:
 
     ########################################
     def collect_messages(self) -> list[str]:
+        """Returns a list of all messages collected here and in subclasses"""
         to_ret = self._messages.copy()
         if self.batteries:
             to_ret.extend(self.batteries.collect_messages())
@@ -191,10 +225,9 @@ class KPowerDevice:
 
 
     ########################################
-    def stats_file_load(self) -> dict[str, Any] | None:
-        """
-        Will try to load old stats file and minimally validate it
-        :return: if loaded OK then file JSON content as dict, in all other cases - None
+    def prepare_permastats(self) -> dict[str, Any]:
+        """Will try to load old stats file and minimally validate it.
+        :return: if loaded OK, then saved JSON content as dict, in all other cases - bare initializer
         """
         # prep a fallback data. Also used to match current config against loaded JSON
         t = int(time.time())
@@ -215,8 +248,8 @@ class KPowerDevice:
                 'start_ts': [],  # starting timestamp of the week
                 # blackouts are simple integer  totals for this whole week
                 'blackouts_count': [],
-                'blackouts_time': [],  # hours
-            }
+                'blackouts_time': [],  # seconds
+            },
         }
 
         try:
@@ -246,18 +279,10 @@ class KPowerDevice:
                 invalid = True
                 self.init_warnings += 1
 
-            if invalid:  # init with a stub
-                self._pdata = init_data
-                return None
+            if not invalid:
+                return saved_stats
 
-            return saved_stats
-
-        #  no saved data - performing initial setup
-        self._pdata = init_data
-
-        self._weekly_shift()  # add new week items to start with
-
-        return None
+        return init_data
 
 
     ########################################
@@ -270,19 +295,31 @@ class KPowerDevice:
             return False
 
         bakfile = self._file_name + '.bak'
-        try:
-            if os.path.exists(self._file_name):
-                if os.path.exists(bakfile):
+        if os.path.exists(self._file_name):
+            if os.path.exists(bakfile):
+                try:
                     os.remove(bakfile)
+                except Exception as e:
+                    self._messages.append("ERROR removing statistics .bak: " + str(e))
+                    return False
 
+            try:
                 os.rename(self._file_name, bakfile)
+            except Exception as e:
+                self._messages.append("ERROR saving statistics. Rename to .bak: " + str(e))
+                return False
 
+        try:
             self._pdata['ts'] = int(time.time())
+            to_save = copy.deepcopy(self._pdata)
+            to_save.update(self.batteries.get_permastats())
+            to_save['messages'] = []
+            for m in self.collect_messages():
+                if m.startswith('ERROR') or m.startswith('WARNING'):
+                    to_save['messages'].append(m)
+
             with open(self._file_name, mode='w', encoding='utf-8') as outfile:
-                dump = json.dumps(self._pdata)[:-1] + ','
-                outfile.write(dump)
-                self.batteries.stats_file_append(outfile)
-                outfile.write('}')
+                json.dump(to_save, outfile, indent=2)
             return True
         except Exception as e:
             self._messages.append("ERROR saving statistics: " + str(e))
@@ -292,7 +329,7 @@ class KPowerDevice:
             if not os.path.exists(self._file_name) and os.path.exists(bakfile):
                 os.rename(bakfile, self._file_name)
         except Exception as e:  # shouldn't happen, but anyway
-            self._messages.append("ERROR restoring original save: " + str(e))
+            self._messages.append("ERROR restoring original stats save: " + str(e))
 
         return False
 
@@ -332,16 +369,20 @@ class KPowerDevice:
 
     ########################################
     def get_battery_runtime(self) -> tuple[int, int, int, int]:
-        """Return battery runtime information:
+        """Return battery remaining capacity and runtimes information
         :return tuple(remaining Wh, secs to 80%, secs to 50%, secs to 10%)"""
 
+        # todo: Use self.load_samples to approx if load==zero or these DONT differ significantly from the .last_load
         wh, prc = self.batteries.get_remaining_power()
-        whprc = 3600 * wh / 100.0  # 1% of remaining Watts/seconds
-        la = -1 if self.commons.last_load == 0.0 else self.commons.last_load
-        # todo: Use self.load_samples to approximate if its differ significantly from the .last_load
-        to80 = 0 if prc <= 80.0 else int(whprc * (prc - 80.0) / la)
-        to50 = 0 if prc <= 50.0 else int(whprc * (prc - 50.0) / la)
-        to10 = 0 if prc <= 10.0 else int(whprc * (prc - 10.0) / la)
+        w_sec_prc = 3600 * wh / 100.0  # 1% of remaining Watts/seconds
 
-        return int(prc * whprc / 3600), to80, to50, to10
+        if self.commons.last_load == 0:  # we may want to return numbers high enough to not cause robot panic
+            return int(prc * w_sec_prc / 3600), 4200, 4200, 4200
+
+        load = -1 if self.commons.last_load == 0 else self.commons.last_load
+        to80 = 0 if prc <= 80.0 else int(w_sec_prc * (prc - 80.0) / load)
+        to50 = 0 if prc <= 50.0 else int(w_sec_prc * (prc - 50.0) / load)
+        to10 = 0 if prc <= 10.0 else int(w_sec_prc * (prc - 10.0) / load)
+
+        return int(prc * w_sec_prc / 3600), to80, to50, to10
 

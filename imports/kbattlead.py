@@ -1,3 +1,7 @@
+"""kadpy.kbattlead: This module is a part of the hardware monitoring toolset from GitHub/kadavris/monitoring
+The main feature is the KBattLead class that provides means to manage a Lead-Acid type battery.
+Made by Andrej Pakhutin"""
+
 import copy
 from configparser import ConfigParser, SectionProxy
 import kadpy.kbattstats as kbattstats

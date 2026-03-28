@@ -1,11 +1,10 @@
-"""
-This module is a part of the hardware monitoring toolset from GitHub/kadavris/monitoring
+"""kadpy.kbattstats: This module is a part of the hardware monitoring toolset from GitHub/kadavris/monitoring
 The main feature is the KBattStats base class that provides simple statistical data processing
 for the UPS-type device's battery health.
-"""
+Made by Andrej Pakhutin"""
+
 from configparser import ConfigParser
 import copy
-import json
 import kadpy.kpowerutils as kpu
 from kadpy.kpowerutils import KBatteryTypes
 from kadpy.kpowerutils import KPowerDeviceCommons
@@ -24,7 +23,6 @@ class KBattStats:
         :param config: ConfigParser - .ini file configuration
         :param saved_stats: dict: JSON 'batteries' dict from permastorage or None
         """
-        dev_conf = config['power.' + dev_commons.dev_id]
         batt_conf_name = 'battery.' + batt_id
         batt_conf = config[batt_conf_name]
 
@@ -43,7 +41,7 @@ class KBattStats:
         # private:
         self._calc_charge_data = batt_conf.getboolean('calc_charge_data', dev_commons.calc_charge_data)
         self._ideal_sector_speed: int = 3600 * self.capacity_wh // (kpu.CHARGE_STEPS - 1)
-        self._pdata: dict[str, Any] | None = None  # persistent data that may be saved into a file
+        self._pdata: dict[str, Any]  # persistent data that may be saved into a file
 
         # initial current states
         self._charge_sector: int = -1  # which charge percentage sector we are in (see CHARGE_STEPS)
@@ -56,7 +54,6 @@ class KBattStats:
         # prep a fallback data. Also used to match current config against loaded JSON
         init_data: dict = {
             'registered': [int(time.time()), time.asctime()],
-            'messages': [],
             'type': str(self.type),
             'vnom': self.v_nom,
             'capacity_ah': self.capacity_ah,
@@ -92,7 +89,7 @@ class KBattStats:
                 self.invalid = True
                 self.messages.extend(m)
 
-            if len(my_old_stats['messages']) > 0:  # Oh. That was already broken
+            if 'messages' in my_old_stats and len(my_old_stats['messages']) > 0:  # Oh. That was already broken
                 for m in my_old_stats['messages']:
                     if 'have OLD message' not in m and (m.startswith('ERROR') or m.startswith('WARNING')):
                         self.invalid = m.startswith('ERROR')
@@ -129,7 +126,8 @@ class KBattStats:
         else:  #  no saved data - performing initial setup
             self._pdata = init_data
 
-            self._weekly_shift()  # add new week items to start with
+        # add new week items to start with
+        self._weekly_shift()
 
 
     ########################################
@@ -141,9 +139,13 @@ class KBattStats:
         t = int(time.time())
         w = cast(dict[str, list[Any]], self._pdata['weekly'])  # to shut IDE up
 
-        for k in w:
-            while len(w[k]) >= kpu.WEEKS_IN_A_YEAR:
-                w[k].pop()
+        if len(w['start_ts']) > 0:
+            if w['start_ts'][0] < t - kpu.SECONDS_IN_A_WEEK:  # more than week passed in latest rec
+                for k in w:  # removing oldest recs if needed
+                    while len(w[k]) >= kpu.WEEKS_IN_A_YEAR:
+                        w[k].pop()
+            else:
+                return  # still the same week
 
         w['start_ts'].insert(0, t)
 
@@ -171,12 +173,13 @@ class KBattStats:
 
 
     ########################################
-    def stats_file_append(self, file) -> None:
-        """Append local info as JSON to the file being saved"""
-        self._pdata['messages'] = self.messages.copy()
-        file.write('"' + self.id + '":\n')
-        file.write(json.dumps(self._pdata))
-        # file.write('}')
+    def get_permastats(self) -> dict:
+        """Returns a copy of internal perma stats dictionary,
+         prepared to be incorporated into save file"""
+
+        pd = copy.deepcopy(self._pdata)
+        pd['messages'] = self.messages.copy()
+        return { self.id: pd }
 
 
     ########################################
@@ -187,6 +190,7 @@ class KBattStats:
         :param upsc_data: dict: device's current state as reported by upsc
         :return: None
         """
+        pass
 
 
     ########################################

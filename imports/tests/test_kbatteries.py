@@ -1,11 +1,9 @@
 #!/usr/bin/env python
 """Unit tests for kpowerdevice.py"""
 import copy
-import time
 import unittest
 from configparser import ConfigParser
 from typing import Any
-
 from imports.kbatteries import KBatteries
 import imports.kpowerutils as kpu
 from imports.kpowerutils import KPowerDeviceCommons
@@ -61,8 +59,8 @@ class TestKBatteries(unittest.TestCase):
         conf.read_dict(conf_init)
         comm = make_commons(self.tpl_dev_id)
 
-        kb = KBatteries(comm, conf, {})
-        self.assertEqual(1, len(kb.messages))
+        kb = KBatteries(comm, conf, None)
+        self.assertEqual(1, len(kb.messages), kb.messages)
         self.assertEqual(0, len(kb._batteries))
         self.assertEqual(0, len(kb._ids))
 
@@ -97,7 +95,7 @@ class TestKBatteries(unittest.TestCase):
         conf.read_dict(conf_init)
         comm = make_commons(self.tpl_dev_id)
 
-        kb = KBatteries(comm, conf, {})
+        kb = KBatteries(comm, conf, None)
         self.assertEqual(0, len(kb.messages), kb.messages)
         self.assertEqual( bnum, len(kb._batteries))
         self.assertEqual( bnum, len(kb._ids))
