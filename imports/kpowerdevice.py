@@ -19,6 +19,7 @@ class KPowerDevice:
     After initialization, if any important option is invalid we'll set it to the value,
     that will be absolutely ridiculous on screen, like negative power or times.
     That way it is easier for me to catch up on problems, instead on sifting through unfriendly journalctl output"""
+
     def __init__(self, device_id: str, config: ConfigParser) -> None:
         # init the bare minimum first in case of severe errors
         self.id: str = device_id
@@ -55,7 +56,7 @@ class KPowerDevice:
             self.commons.calc_charge_data = False
             self._messages.append("ERROR: Invalid calc_charge_data def")
 
-        self.bulk_report: list[str]  = []  # upsc attributes that will be posted in the main topic in bulk
+        self.bulk_report: list[str] = []  # upsc attributes that will be posted in the main topic in bulk
         self.in_blackout: bool = False  # we have been on battery for more than 1 status check cycle
         self.next_stats_save: float = time.time()
         self.load_samples: list[int] = [0]  # load levels for the last hour
@@ -169,7 +170,6 @@ class KPowerDevice:
 
         self._weekly_shift()  # add new week items to start with
 
-
     ########################################
     def _update_hourly_load(self, load: int) -> None:
         """
@@ -188,7 +188,6 @@ class KPowerDevice:
         while len(lsamp) > maxnum:
             lsamp.pop()
         lsamp.insert(0, load)
-
 
     ########################################
     def _weekly_shift(self) -> None:
@@ -213,7 +212,6 @@ class KPowerDevice:
         w['blackouts_count'].insert(0, 0)
         w['blackouts_time'].insert(0, 0.0)
 
-
     ########################################
     def collect_messages(self) -> list[str]:
         """Returns a list of all messages collected here and in subclasses"""
@@ -222,7 +220,6 @@ class KPowerDevice:
             to_ret.extend(self.batteries.collect_messages())
 
         return to_ret
-
 
     ########################################
     def prepare_permastats(self) -> dict[str, Any]:
@@ -251,6 +248,8 @@ class KPowerDevice:
                 'blackouts_time': [],  # seconds
             },
         }
+
+        saved_stats: dict[str, Any] | None
 
         try:
             with open(self._file_name, 'r') as f:
@@ -283,7 +282,6 @@ class KPowerDevice:
                 return saved_stats
 
         return init_data
-
 
     ########################################
     def stats_file_save(self) -> bool:
@@ -333,7 +331,6 @@ class KPowerDevice:
 
         return False
 
-
     ########################################
     def process_upsc_data(self, upsc_data: dict) -> None:
         """Will process new upsc data"""
@@ -359,30 +356,35 @@ class KPowerDevice:
 
         self.batteries.process_upsc_data(upsc_data)
 
-
     ########################################
     @property
     def power_load(self) -> int:
         """Returns device's load value in Watts"""
         return int(self.commons.last_load)
 
-
     ########################################
-    def get_battery_runtime(self) -> tuple[int, int, int, int]:
-        """Return battery remaining capacity and runtimes information
-        :return tuple(remaining Wh, secs to 80%, secs to 50%, secs to 10%)"""
+    def get_battery_runtime(self) -> tuple[int, int, int, int, int]:
+        """Return battery remaining capacity and runtimes information.
+        Negative values used to denote re-charge times to a specific percentage.
 
-        # todo: Use self.load_samples to approx if load==zero or these DONT differ significantly from the .last_load
-        wh, prc = self.batteries.get_remaining_power()
-        w_sec_prc = 3600 * wh / 100.0  # 1% of remaining Watts/seconds
+        :return tuple: remaining Wh, seconds to 80%, seconds to 50%, seconds to 10%, seconds to 100%
+        """
+        def prc_to_secs(prc_threshold: int) -> int:
+            if rem_percent >= prc_threshold:
+                return int(prc_per_wsec * (rem_percent - prc_threshold) // self.commons.last_load)
+            else:  # return negative seconds to recharge to this point
+                return (rem_wh - (prc_threshold * prc_per_wh)) // chrg_spd_wh * 3600
+
+        rem_wh, rem_percent, total_cap_wh, chrg_spd_wh = \
+            self.batteries.get_remaining_power()
+        prc_per_wsec = 3600 * total_cap_wh // 100  # 1% of capacity in Watts/seconds
 
         if self.commons.last_load == 0:  # we may want to return numbers high enough to not cause robot panic
-            return int(prc * w_sec_prc / 3600), 4200, 4200, 4200
+            # todo: Use self.load_samples to approx if load==zero or these DONT differ significantly
+            #       from the .last_load
+            return rem_wh, 4200, 4200, 4200, 4200
 
-        load = -1 if self.commons.last_load == 0 else self.commons.last_load
-        to80 = 0 if prc <= 80.0 else int(w_sec_prc * (prc - 80.0) / load)
-        to50 = 0 if prc <= 50.0 else int(w_sec_prc * (prc - 50.0) / load)
-        to10 = 0 if prc <= 10.0 else int(w_sec_prc * (prc - 10.0) / load)
+        prc_per_wh = total_cap_wh // 100
 
-        return int(prc * w_sec_prc / 3600), to80, to50, to10
-
+        return rem_wh, prc_to_secs(80), prc_to_secs(50),\
+            prc_to_secs(10), prc_to_secs(100)

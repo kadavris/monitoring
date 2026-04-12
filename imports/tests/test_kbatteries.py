@@ -67,7 +67,7 @@ class TestKBatteries(unittest.TestCase):
         # test if methods are still working
         kb.process_upsc_data({})  # no return. shouldn't raise exceptions
         self.assertEqual(0, len(kb.get_list()))  # no ids
-        self.assertEqual((0, 0.0), kb.get_remaining_power())
+        self.assertEqual((0, 0.0, 0, -1), kb.get_remaining_power())
 
 
     ################################################

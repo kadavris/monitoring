@@ -148,7 +148,7 @@ class TestKBattStats(unittest.TestCase):
 
         # We need to make sure that initialization protocol hasn't changed
         self.assertEqual( int(100 * 48 * 0.82), kb.capacity_wh )
-        self.assertEqual( 100, kb.capacity_ah )
+        self.assertEqual(100, kb.capacity_ah_nom)
         self.assertEqual( 100.0, kb.charge )
         self.assertEqual( 0, len(kb.messages), kb.messages )
         self.assertEqual( kpu.KBatteryTypes.BT_LEAD.value, kb.type.value)
@@ -211,7 +211,7 @@ class TestKBattStats(unittest.TestCase):
         self.assertEqual( 0, len(kb.messages), kb.messages )
 
         # undefined state is unchanged
-        self.assertEqual( 100, kb.capacity_ah )
+        self.assertEqual(100, kb.capacity_ah_nom)
         self.assertEqual( kpu.KBatteryTypes.BT_LEAD.value, kb.type.value )
         self.assertEqual( 48, kb.v_nom )
 

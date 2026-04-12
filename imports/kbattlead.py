@@ -74,6 +74,7 @@ class KBattLead(kbattstats.KBattStats):
         self._last_v_step_up_ts = 0.0  # timestamp of the last voltage change. Used on > float charge
         self._charge_state = _CS_NONE
         self._pack_size: int = self.v_nom // 12
+        self.charging_speed_wh = self.v_nom * dev_commons.charging_current
 
         if self.invalid:
             return
@@ -82,11 +83,11 @@ class KBattLead(kbattstats.KBattStats):
     ########################################
     def _determine_charge(self, upsc_data: dict, discharging: bool) -> float:
         """
-        Based on device's configuration will return batterg charge level as reported by device
+        Based on device's configuration will return battery charge level as reported by device
         or calculated by other means.
         WARNING! Should be called once from update_stats() because it records state changes internally!
         :param upsc_data: dict: data collected from device interface
-        :param discharging: bool: True if discharging mode is detected in currfent data packet
+        :param discharging: bool: True if discharging mode is detected in the current data packet
         :return: int: charge level in percents
         """
         if self.invalid:  # make it a visible problem on a dashboard
@@ -99,7 +100,6 @@ class KBattLead(kbattstats.KBattStats):
                 self.charge = round(float(upsc_data['battery_charge']), 1)
                 return self.charge
 
-        # Is device lying to us? (probably we need a config option for this calculated item)
         v = float(upsc_data['battery_voltage']) / self._pack_size
 
         if discharging:
@@ -130,7 +130,7 @@ class KBattLead(kbattstats.KBattStats):
                 # here, assume if battery has not gained > 0.2V (~5.5%) of charge
                 # for the time it should have had with 10Amp current - it is in float state already.
                 elif time.time() - self._last_v_step_up_ts > \
-                        self.capacity_ah / self.commons.charging_current * 3600:
+                        self.capacity_ah_nom / self.commons.charging_current * 3600:
                     self._charge_state = _CS_FLOAT
 
         else:  # PAST_BOOST
@@ -230,8 +230,14 @@ class KBattLead(kbattstats.KBattStats):
     ########################################
     @override
     def get_battery_health(self) -> dict:
-        """Returns battery health information, the battery id is ignored"""
-        bdh = self._pdata['health']
+        """Returns battery health information within a dict:
+        - "cycles": [<soft>,<norm>,<bad>] - (dis)charge cycles count for 100-80%, 80-50% and <50%.
+        - "status": "Whatever" - "OK" is OK.
+        - "tbf": <weeks before a failure> - -1 if no failure planned to happen.
+        - "wellness": <percent> - Computed amount of the actual capacity left.
+        This structure is a copy of a saved perma-stats battery element "health"
+        """
+        bdh: dict[str,Any] = self._pdata['health']
 
         if self.invalid:
             bdh['status'] = "Invalid setup!"
@@ -247,11 +253,11 @@ class KBattLead(kbattstats.KBattStats):
                     dspeed_avg += v
                     samples += 1
 
-            if samples >= 10:
+            if samples > 2 * kpu.CHARGE_STEPS:  # count 2 weeks or more for better averaging
                 break
 
         status = []
-        if samples >= 5:  # ensure there are some variety
+        if samples >= 5:  # ensure there is some variety
             dspeed_avg /= samples
             wellness = round(dspeed_avg / self._ideal_sector_speed, 2)
         else:
@@ -263,24 +269,29 @@ class KBattLead(kbattstats.KBattStats):
 
         if wellness >= 0.8:
             status.append('OK (>80%)')
-            wellness = 10 * int(10.0 * wellness)
+            # wellness = 10 * round(10.0 * wellness)  #  Show 10% precision for higher vitality
         else:
-            if wellness >= 0.5:
-                wellness = 10 * int(10.0 * wellness)
-                status.append(f'Aged: {wellness}%')  # don't dive into small denominations
-            else:
+            if wellness >= 0.5:  #  Show 5% precision for medium vitality
+                ws = wellness * 10.0
+                wi = int(ws)
+                if ws - wi >= 0.5:
+                    wi = wi * 10 + 5
+                else:
+                    wi = wi * 10
+                status.append(f'Aged: {wi}%')
+            else:  # full precision for end of life
                 if wellness < 0.0:
                     wellness = 0.0
-                else:
-                    wellness = int(100.0 * wellness)
 
-                if wellness >= 20:
-                    status.append(f'Failing: {wellness}%')
+                if wellness >= 0.2:
+                    status.append(f'Failing: {int(100.0 * wellness)}%')
                 else:
                     status.append(f'Trash it')
 
         bdh['status'] = ', '.join(status)
-        bdh['wellness'] = int(wellness)
+        self.wellness = int(100.0 * wellness)
+        self.capacity_wh = int(self.capacity_ah_nom * self.v_nom * self.commons.power_factor * wellness)
+        bdh['wellness'] = self.wellness
         return copy.deepcopy(bdh)
 
 

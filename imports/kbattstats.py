@@ -33,10 +33,12 @@ class KBattStats:
         self.invalid = False  # used to indicate that this instance has invalid setup or data
         self.messages: list[str] = []
 
-        self.capacity_ah: int = batt_conf.getint('capacity_ah', -1 )
+        self.capacity_ah_nom: int = batt_conf.getint('capacity_ah', -1)
         self.type: KBatteryTypes = kpu.bt_from_str(batt_conf.get('type', '' ))
         self.v_nom: int = batt_conf.getint( 'vnom', -1 )  # nominal Voltage
-        self.capacity_wh: int = int(self.capacity_ah * self.v_nom * dev_commons.power_factor)
+        self.capacity_wh: int = int(self.capacity_ah_nom * self.v_nom * dev_commons.power_factor)
+        self.charging_speed_wh: int = 0  # dummy value. Should be computed in a subclass
+        self.wellness: int = 100  # Wear indicator. Percentage of nominal capacity remaining.
 
         # private:
         self._calc_charge_data = batt_conf.getboolean('calc_charge_data', dev_commons.calc_charge_data)
@@ -56,7 +58,7 @@ class KBattStats:
             'registered': [int(time.time()), time.asctime()],
             'type': str(self.type),
             'vnom': self.v_nom,
-            'capacity_ah': self.capacity_ah,
+            'capacity_ah': self.capacity_ah_nom,
             'health': {
                 'cycles': [0, 0, 0],
                 'status': "OK",
@@ -203,7 +205,7 @@ class KBattStats:
 
     ########################################
     def get_remaining_wh(self) -> int:
-        """Return battery remainig capacity in Wh:
-        :return int: remaining Wh"""
+        """Returns battery remaining capacity in Wh:
+        :return int: remaining Wh. Uses computed wellness to provide realistic data"""
 
         return int(self.charge / 100.0 * self.capacity_wh)

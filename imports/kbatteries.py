@@ -118,14 +118,26 @@ class KBatteries:
 
 
     ########################################
-    def get_remaining_power(self) -> tuple[int, float]:
-        """Return a sum of batteries remaining capacity: tuple: (remaining Wh: int, remaining percentage: float)"""
+    def get_remaining_power(self) -> tuple[int, float, int, int]:
+        """Return a sum of batteries remaining capacity:
+         tuple:
+         - remaining Wh: int
+         - remaining percentage: float
+         - total capacity wh: int
+         - avg charging speed in Wh: int)
+         """
+
+        if  len(self._batteries) == 0:
+            return 0, 0.0, 0, -1
 
         rwh: int = 0
         cap: int = 0
+        chspd: int = 0
         for b in self._batteries:
             rwh += b.get_remaining_wh()
             cap += int(b.capacity_wh)
+            chspd += b.charging_speed_wh
 
-        return rwh, (0.0 if cap == 0 else round(100.0 * rwh / cap, 1))
+        return rwh, (0.0 if cap == 0 else round(100.0 * rwh / cap, 1)), \
+                cap, chspd // len(self._batteries)
 
