@@ -201,8 +201,8 @@ def get_data_from_upsc(dev_id: str) -> dict:
         upsc_attributes_needed.extend( kpd.bulk_report )
 
     upsc_bin = ['upsc', dev_id]
-    if 'upsc_binary' in GLOBAL_CONFIG:
-        upsc_bin = GLOBAL_CONFIG.get('upsc_binary').replace('$device', dev_id).split()
+    if 'upsc_binary' in GLOBAL_CONFIG['DEFAULT']:
+        upsc_bin = GLOBAL_CONFIG.get('DEFAULT', 'upsc_binary').replace('$device', dev_id).split()
 
     upsc_proc = subprocess.Popen(upsc_bin,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
