@@ -106,9 +106,9 @@ class MikrotikQuery:
 
         self.last_error: int = 0
         # self.invalid: bool = False
-        self.session: requests.Session = requests.Session()
-        self.session.auth = (self.ini['user'], self.ini['password'])
-        self.session.headers.update({'Content-Type': 'application/json'})
+        self._session: requests.Session = requests.Session()
+        self._session.auth = (self.ini['user'], self.ini['password'])
+        self._session.headers.update({'Content-Type': 'application/json'})
         self._ca = self.ini.get('cacert', False)
 
         self.traffic_stats: dict[str, int|float] = {}
@@ -126,8 +126,14 @@ class MikrotikQuery:
             if ini_key not in self.ini:
                 raise KeyError(ini_key)
 
-            return self.ini['topic_root'] + '/' + self.ini[ini_key] + '/' + '/'.join(names)
+            r = self.ini['topic_root'] + '/' + self.ini[ini_key]
+            if len(names) == 0:
+                return r
+            return r + '/' + '/'.join(names)
         else:
+            if len(names) == 0:
+                raise KeyError(names)
+
             return self.ini['topic_root'] + '/' + '/'.join(names)
 
 
@@ -142,7 +148,7 @@ class MikrotikQuery:
 
         Use command in a native form: /x/y/z. Parameters are optional, depending on the command you use.
         Return value is a tuple where the 1st element is an integer status code
-        and the 2nd is the data returned as is or None in case of error
+        and the 2nd is the data returned as is
         """
         global ARGS
 
@@ -150,10 +156,10 @@ class MikrotikQuery:
             print("D: -> query: '" + self.url + cmd + "'\n")
 
         if parameters:
-            resp: requests.Response = self.session.post(self.url + cmd, data=json.dumps(parameters),
-                                                    verify=self._ca)
+            resp: requests.Response = self._session.post(self.url + cmd, data=json.dumps(parameters),
+                                                         verify=self._ca)
         else:
-            resp: requests.Response = self.session.post(self.url + cmd, verify=self._ca)
+            resp: requests.Response = self._session.post(self.url + cmd, verify=self._ca)
 
         if ARGS.debug:
             print("D: <- resp:  '" + resp.text + "'")
