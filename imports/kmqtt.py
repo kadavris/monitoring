@@ -2,6 +2,7 @@
 This module is a part of the monitoring toolset from GitHub/kadavris/monitoring
 The main feature is the KMQTT class that provides simple interface to the MQTT agent
 """
+import base64
 import json
 import re
 import select
@@ -20,6 +21,12 @@ class KMQTT:
       - send_json_long() to send a long message with MQTT headers
     """
     def __init__(self, cfg_invoke: str, critical: bool=True, debug: bool = False) -> None:
+        """Standard init function for KMQTT class.
+
+        :param cfg_invoke: str: process invocation string from your script config file
+        :param critical: bool: is this messaging process critical or not
+        :param debug: bool: True for a lot of debug messages
+        """
         self._critical: bool = critical
         self._cfg_invoke: str = cfg_invoke
         self._debug: bool = debug or -1 != self._cfg_invoke.find('--debug')
@@ -39,7 +46,7 @@ class KMQTT:
             return
 
         if self._debug:
-            print("+ Spawning sender process:", self._cfg_invoke, file=sys.stderr)
+            print("+ KMQTT Spawning sender process:", self._cfg_invoke, file=sys.stderr)
 
         # default bufsize may gobble a whole loop of data and do nothing till the next
         self._pipe = subprocess.Popen(shlex.split(self._cfg_invoke), bufsize=1, encoding='utf-8',
@@ -48,12 +55,12 @@ class KMQTT:
                                       stderr=None if self._debug else subprocess.DEVNULL)
 
         if not self._pipe:
-            print('! ERROR running ', self._cfg_invoke, file=sys.stderr)
+            print('! KMQTT ERROR running ', self._cfg_invoke, file=sys.stderr)
             if self._critical:
                 sys.exit(1)
 
         if self._pipe.poll():  # poll() return None if process is still there
-            print('! Problem running ', self._pipe.args, ": exited ",
+            print('! KMQTT Problem running ', self._pipe.args, ": exited ",
                   ("abnormally" if self._pipe.returncode > 0 else "gracefully"),
                   "with rc:", self._pipe.returncode, file=sys.stderr)
             if self._critical:
@@ -114,7 +121,7 @@ class KMQTT:
 
             elif len(slists[2]) != 0 and slists[2][0] != 0:
                 if self._debug:
-                    print('! pipe error')
+                    print('! KMQTT pipe error')
 
                 self.terminate()
 
@@ -122,7 +129,7 @@ class KMQTT:
             answer = self._pipe.stdout.readline()
 
             if self._debug:
-                print('< Answer:', answer)
+                print('< KMQTT Answer:', answer)
 
         return answer
 
@@ -141,19 +148,18 @@ class KMQTT:
                 return answer
 
             if self._debug:
-                print("! sender says:", answer, file=sys.stderr)
+                print("! KMQTT sender says:", answer, file=sys.stderr)
 
         if self._debug:
-            print("! ERROR processing RC packet from sender", file=sys.stderr)
+            print("! KMQTT ERROR processing RC packet from sender", file=sys.stderr)
 
         return None
 
 
     ########################################
     def _send_prepared(self, msg: str) -> None:
-        """
-        Sends completely ready message to mqtt agent
-        :param msg: str: sent as is
+        """Sends prepared message to mqtt agent
+        :param msg: str: will be sent as is
         :return: None
         """
         try_number = 0
@@ -165,15 +171,12 @@ class KMQTT:
 
                 try_number = 1
                 if self._debug:
-                    print("! Respawning sender.", file=sys.stderr)
+                    print("! KMQTT Respawning sender.", file=sys.stderr)
                 self._spawn_sender(True)
 
             if not self._pipe or self._pipe.poll():  # check if it is still alive (not None)
                 self._spawn_sender(True)
                 continue
-
-            if self._debug:
-                print('> Sending:', msg)
 
             try:
                 self._pipe.stdin.write(msg)
@@ -181,7 +184,7 @@ class KMQTT:
             except Exception:
                 if self._debug:
                     exc_type, exc_val, traceback = sys.exc_info()
-                    print("! Sending failed (", exc_val, ")", file=sys.stderr)
+                    print("! KMQTT Sending failed (", exc_val, ")", file=sys.stderr)
                 continue
 
             answer = self._get_rc_answer()
@@ -192,36 +195,39 @@ class KMQTT:
                 j = json.loads(answer)
                 if not "rc" in j:
                     if self._debug:
-                        print("! Got an improper answer: ", answer, file=sys.stderr)
+                        print("! KMQTT Got an improper answer: ", answer, file=sys.stderr)
                     break
 
                 if int(j["rc"]) != 0:
                     if self._debug:
-                        print("! Got RC:", j['rc'], "->", j['message'], file=sys.stderr)
+                        print("! KMQTT Got RC:", j['rc'], "->", j['message'], file=sys.stderr)
 
-            except Exception:
+            except json.JSONDecodeError:
                 if self._debug:
-                    print("! Got invalid JSON:", answer, file=sys.stderr)
+                    print("! KMQTT Got invalid JSON:", answer, file=sys.stderr)
                 return
 
             break
 
 
     ########################################
-    def send(self, *in_msg: str) -> None:
+    def send(self, *msg: str) -> None:
         """
         Sends a plain message to the spawned mqtt agent. Fixes it to be one-line.
         :param in_msg: list of strings: parts of the whole message
         :return: None
         """
 
+        if self._debug:
+            print('> KMQTT send():', ''.join(msg))
+
         # our standard sending tool expect either one-line JSON or back-slash terminated multiline one
-        self._send_prepared(re.sub(r"([^\\])\n", "\\1\\\n", "".join(in_msg)))
+        self._send_prepared(re.sub(r"([^\\])\n", "\\1\\\n", "".join(msg)))
 
 
     ########################################
     def send_json_long(self, topic: str, *msg: str, retain: bool=False,
-                  stop_word: str = "\x01RlVDS1JVU1NJQQ\x02") -> None:
+                  stop_word: str = "NDIuIDQyIGlzIHRoZSBhbnN3ZXIK") -> None:
         """
         Sends multiline message
         :param topic: topic name
@@ -230,19 +236,27 @@ class KMQTT:
         :param stop_word: str: optional stop word to use as an EOM indicator
         :return: None
         """
+        if self._debug:
+            print('> KMQTT send_json_long():', ''.join(msg))
+
         self._send_prepared(f'{{ "mpublish":"{stop_word}", "retain":{str(retain).lower()},'
                          f' "topics":["{topic}"] }}\n' + ''.join(msg) + stop_word)
 
 
     ########################################
     def send_json_short(self, topic: str, *msg: str, retain: bool=False) -> None:
-        """
-        Posts a short or one-line message to a single topic
+        """Posts a short, preferably one-line message to a single topic.
+         Double quotes are being escaped automatically.
+
         :param topic: str. topic name
         :param msg: str list
         :param retain: bool: MQTT retain flag
-        :return:
+        :return: None
         """
-        self.send('{"publish":"', ''.join(msg),
+        if self._debug:
+            print('> KMQTT send_json_short():', ''.join(msg))
+
+        to_send = base64.b64encode(''.join(msg).encode('utf-8')).decode('utf-8')
+        self.send('{"bpublish":"', to_send,
                         f'", "retain":{str(retain).lower()}, "topics":["{topic}"]}}')
 
