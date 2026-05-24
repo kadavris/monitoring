@@ -1,5 +1,14 @@
-"""kadpy.kpowerdevice: This module is a part of the hardware monitoring toolset from GitHub/kadavris/monitoring.
-Uninterruptible power device related things. Made by Andrej Pakhutin"""
+"""kpowerdevice.py
+Provides core functionality for monitoring and tracking data from
+an Uninterruptible Power Supply (UPS) device.
+
+This module acts as the primary data model and interface for processing
+power metrics, recording status history (loads, messages, blackouts),
+and managing persistent state for UPS monitoring within the kadavris/monitoring
+toolset.
+
+Author: Andrej Pakhutin
+"""
 
 import copy
 import json
@@ -15,19 +24,28 @@ from kadpy.kpowerutils import KPowerDeviceCommons
 
 
 class KPowerDevice:
-    """UPS device class for use in mqtt-power daemon.
+    """UPS device class that manages UPS device data processing at the top level.
     After initialization, if any important option is invalid we'll set it to the value,
     that will be absolutely ridiculous on screen, like negative power or times.
     That way it is easier for me to catch up on problems, instead on sifting through unfriendly journalctl output"""
 
     def __init__(self, device_id: str, config: ConfigParser) -> None:
+        """Initializes the power device object by reading relevant .ini configuration parameters
+         for specific device.
+         In the .ini the [power.<device_id>] section must exist.
+
+        :param device_id: The unique identifier string for the power device to be controlled here.
+        :type device_id: str
+        :param config: A configuration parser object having .ini file loaded.
+        :type config: ConfigParser
+        """
         # init the bare minimum first in case of severe errors
         self.id: str = device_id
         self.init_errors = 0
         self.init_warnings = 0
         self._messages: list[str] = []  # filled with problem reports like if setup is invalid
 
-        dev_sect_name = 'power.' + device_id  # this stuff existence should be checked before this obj even created
+        dev_sect_name = 'power.' + device_id  # this section existence should be checked before this obj is created
         dev_sect = config[dev_sect_name]
 
         # properties based on config values

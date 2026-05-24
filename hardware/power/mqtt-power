@@ -27,7 +27,7 @@ from typing import Any
 # globals and prototypes to shut IDE up
 DEFAULT_CONFIG_PATH = '/etc/smarthome/monitoring/'
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_PATH + 'mqtt-power.ini'
-GLOBAL_CONFIG: ConfigParser = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
+FULL_CONFIG: ConfigParser = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
 Sender: KMQTT
 DEVICES: dict[str, KPowerDevice] = {}
 
@@ -56,7 +56,7 @@ def load_config(c_file: str) -> None:
     :param c_file: path to config file
     :return: parsed config section object
     """
-    global ARGS, GLOBAL_CONFIG
+    global ARGS, FULL_CONFIG
 
     file = c_file
 
@@ -112,7 +112,7 @@ def update_vf_stats(dev_id: str, prefix: str, time_value: int, voltage: float, f
         ds['in_bo'] = False
     else:
         if prefix == 'd':  # update blackouts once per m/h/d calls series
-            ds['bo_time'] += int(GLOBAL_CONFIG['power.' + dev_id]['sample_interval'])
+            ds['bo_time'] += int(FULL_CONFIG['power.' + dev_id]['sample_interval'])
             if not ds['in_bo']:
                 ds['blackouts'] += 1
                 ds['in_bo'] = True
@@ -132,7 +132,7 @@ def get_model_specific_config(dev_id: str, keyword: str, default: str = "") -> s
     :param default: str. Default value to return if not found
     :return: str. The value
     """
-    global GLOBAL_CONFIG
+    global FULL_CONFIG
 
     return GLOBAL_CONFIG["power." + dev_id].get(keyword, default)
 
@@ -144,7 +144,7 @@ def device_init(dev_id: str) -> bool:
     :param dev_id: str: device ID
     :return: bool: success
     """
-    global DEVICES, GLOBAL_CONFIG
+    global DEVICES, FULL_CONFIG
 
     dev_sect_name = 'power.' + dev_id
     if dev_sect_name not in GLOBAL_CONFIG:
@@ -201,8 +201,8 @@ def get_data_from_upsc(dev_id: str) -> dict:
         upsc_attributes_needed.extend( kpd.bulk_report )
 
     upsc_bin = ['upsc', dev_id]
-    if 'upsc_binary' in GLOBAL_CONFIG['DEFAULT']:
-        upsc_bin = GLOBAL_CONFIG.get('DEFAULT', 'upsc_binary').replace('$device', dev_id).split()
+    if 'upsc_binary' in FULL_CONFIG['DEFAULT']:
+        upsc_bin = FULL_CONFIG.get('DEFAULT', 'upsc_binary').replace('$device', dev_id).split()
 
     upsc_proc = subprocess.Popen(upsc_bin,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -295,7 +295,7 @@ def check_nut() -> bool:
     global ARGS, DEVICES, Sender, stats_vf
 
     for dev_id in DEVICES:
-        dev_conf = GLOBAL_CONFIG['power.' + dev_id]
+        dev_conf = FULL_CONFIG['power.' + dev_id]
         dev_topic = dev_conf['device_topic'].replace('$device', dev_id)
 
         if ARGS.debug:
@@ -440,7 +440,7 @@ parser.add_argument('action', nargs='?', default='', help='non-default action na
 ARGS = parser.parse_args()
 
 load_config(ARGS.config_path)
-DEF_CONF: SectionProxy = GLOBAL_CONFIG['DEFAULT']
+DEF_CONF: SectionProxy = FULL_CONFIG['DEFAULT']
 
 # mqtt sender script tend to hang up (why no SIGPIPE on stdin read?) if we exit hastily.
 # Try to avoid this.

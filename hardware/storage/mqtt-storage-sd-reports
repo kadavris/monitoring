@@ -835,7 +835,8 @@ def get_devices_list() -> None:
             continue
 
         devices[d]['mount'] = '' # we want to see real drive letter in windows. In Linux here may be mount points later
-        print(d, "type", devices[d]['type'], file=sys.stderr) # report only usable ones
+        if args.debug:
+            print(d, "type is", devices[d]['type'], file=sys.stderr) # report only usable ones
 
     if os.path.isdir('/cygdrive/c'): # now collect real drive letters for more handy reports
         get_cygwin_mounts()

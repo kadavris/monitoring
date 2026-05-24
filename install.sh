@@ -4,7 +4,7 @@
 
 ENVFILE="./service-env"
 DEFLIST="mikrotik power storage"
-FULLIST=$DEFLIST
+FULLLIST=$DEFLIST
 
 if [ "$1" == "" ]; then
     echo "Use 'install.sh [-e <env file name>] <name> ... <name>'"
