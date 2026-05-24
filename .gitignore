@@ -1,7 +1,9 @@
-.idea
-.vscode
-.tmp
-.old
-__pycache__/
-.pytest_cache/
 2do.*
+.idea
+.old
+.pytest_cache/
+.tmp
+.vscode
+__pycache__/
+*.log
+mikrotik2mqtt-test-run
