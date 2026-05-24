@@ -1,3 +1,4 @@
+# This is a sample configuration for mikrotik2mqtt script.
 [DEFAULT]
 # for all "topic something" names the final form will be
 # "topic root" + / + this topic name.
@@ -22,9 +23,14 @@ report_interval = 60
 
 # tool to actually post data to the mqtt
 # see http://github.com/kadavris/mqtt-tool for a working solution
-sender = /etc/smarthome/mqtt/mqtt --stdin --quiet router-reports
+sender = /usr/local/bin/mqtt-tool --stdin --quiet router-reports
 
-port = 22
+# Use http or https according to your router's configuration:
+# IP/Services -> api or api-ssl enabled
+port = https
+
+# if you use https and router have certificate signed with your own CA, point this to CA_BUNDLE
+cacert=/etc/pki/CA/cacert.pem
 
 # Now, internal processing distinguishes devices by their IP only.
 # The section name is almost dummy thing, unless you will be using Home Assistant
@@ -33,7 +39,7 @@ port = 22
 [router1]
 #disable = true
 ip = 1.1.1.1
-# NOTE: use non-admin user with read-only permissions for the better security
+# NOTE: use non-admin user with read-only permissions for better security
 user = user
 password = password
 
@@ -44,20 +50,7 @@ topic_root = hw/router/router1
 get_traffic = wan_bridge lan_bride wlan_bridge
 
 # Firewall:
-# Will find all firewall rules having the STATID:field_name tags in comments
+# Will find all firewall rules having the 'STATID:tag_name' tags at the comment begin
 # and produce nice json out of it
-# The value of this option is the topic name.
-# !WARNING! stats printing routine truncates long commentary.
-# !Means that it is safer to put STATID: tag at the beginning of the commentary
+# The value of this option is the mqtt topic name.
 get_firewall_by_id=firewall/byid
-
-# Will produce a listing of rules that match your queries.
-# The action is /ip firewall filter print stats where YOURQUERYHERE
-# XXX, YYY and so on is just the user-defined suffixes to make keys distinct
-# Options:
-#    pack - pack all output datat lines counts to the single line. Default
-#    topic:topicname - set the topic name. default is the value from 'get_firewall_by_id'
-#    name:fieldname - json field prefix. will produce name-bytes and name-packets pair
-#get_firewall_whereXXX=[option[,option...],]query
-#get_firewall_whereYYY=[option[,option...],]other_query
-# and so on

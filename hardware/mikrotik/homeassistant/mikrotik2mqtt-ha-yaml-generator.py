@@ -28,7 +28,7 @@ import typing
 
 
 # --- Helper Functions ---
-def get_config_key(in_config: configparser, section: configparser, key: str) -> str:
+def get_config_key(in_config: configparser.ConfigParser, section: str, key: str) -> str:
     """
     Get a key from the (.ini) config, checking the specific section
     first, then the DEFAULT section.
@@ -41,7 +41,7 @@ def get_config_key(in_config: configparser, section: configparser, key: str) -> 
     return ''
 
 
-def make_full_topic_path(in_config: configparser, section: configparser, topic_key: str) -> str:
+def make_full_topic_path(in_config: configparser.ConfigParser, section: str, topic_key: str) -> str:
     """
     Construct the full MQTT topic path for a given topic key.
     :return topic_name: str
@@ -57,7 +57,7 @@ def make_full_topic_path(in_config: configparser, section: configparser, topic_k
     return f"{topic_base}/{topic_suffix}"
 
 
-def make_scaled_sensor_attr(config: configparser, out_file: typing.TextIO, sensor_name: str, attr: str,
+def make_scaled_sensor_attr(config: configparser.ConfigParser, out_file: typing.TextIO, sensor_name: str, attr: str,
                             default_unit: str, cfgkey: str) -> str:
     """
     In place, generates the value_template and unit for scaled sensors (bytes, packets).
@@ -200,22 +200,15 @@ for host in m2mq_config.sections():
                     topic = f"{make_full_topic_path(m2mq_config, host, 'topic_traffic')}/{interface_lower}"
                     state_topic = f"{topic}/state"
 
-                    yaml_mqtt_h.write(f"""
-- name: "{host_lower}: {interface_lower}"
-  state_topic: "{state_topic}"
-  json_attributes_topic: "{topic}"
-""")
+                    yaml_mqtt_h.write(f'\n- name: "{host_lower}: {interface_lower}"\n  state_topic: "{state_topic}"\n')
+                    yaml_mqtt_h.write(f'  json_attributes_topic: "{topic}"\n')
 
                     traffic_entities_val = script_config['DEFAULT'].get('traffic_entities', '').split()
                     for traffic_ent in traffic_entities_val:
                         main_sensor = re.sub(r'\W+', '_', f"{host_lower}_{interface_lower}").lower()
                         name = f"{host_lower}: {interface_lower}: {traffic_ent}"
 
-                        yaml_mqtt_h.write(f"""
-- name: "{name}"
-  state_topic: "{state_topic}"
-  json_attributes_topic: "{topic}"
-""")
+                        yaml_mqtt_h.write(f'\n- name: "{name}"\n  state_topic: "{state_topic}"\n  json_attributes_topic: "{topic}"')
 
                         if '-byte' in traffic_ent:
                             unit = make_scaled_sensor_attr(script_config, yaml_mqtt_h, main_sensor, traffic_ent, 'B',
@@ -279,7 +272,7 @@ for host in m2mq_config.sections():
                                 yaml_mqtt_h.write(f'  device_class: data_size\n  unit_of_measurement: "{unit_bytes}"\n')
                             else:
                                 yaml_mqtt_h.write(f'  value_template: "{{{{ state_attr( \'sensor.{main_sensor_fw}\', \'{entity}\' ) }}}}"\n')
-                                yaml_mqtt_h.write(f'  unit_of_measurement: "Packets"\n')
+                                yaml_mqtt_h.write('  unit_of_measurement: "Packets"\n')
                                 yaml_mqtt_h.write('  icon: "mdi:train-car-container"\n')
 
                             yaml_mqtt_h.write("  state_class: measurement\n")

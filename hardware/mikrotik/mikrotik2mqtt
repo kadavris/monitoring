@@ -1,31 +1,61 @@
 #!/bin/python
-# This script queries Mikrotik router for various data
-# and pushes it to the mqtt agent
-# Copyright by Andrej Pakhutin (pakhutin <at> gmail)
-# http://github.com/kadavris/monitoring
-# License: see accompanying LICENSE file
-
+"""
+This script queries Mikrotik router for various data and pushes it to the mqtt agent.
+RouterOS V7+ required with REST API enabled.
+Copyright by Andrej Pakhutin (pakhutin <at> gmail)
+http://github.com/kadavris/monitoring
+License: see accompanying LICENSE file in repo.
+"""
+from configparser import SectionProxy
 import argparse
 import configparser
+import json
+from kadpy.kmqtt import KMQTT
 import os
 import re
-import shlex
-from typing import Optional
-
-import select
+import requests
 import signal
-import socket
-import ssh  # Works with parallel-ssh
-import ssh.options
-import ssh.session
-import subprocess
 import sys
 import time
+from typing import Any, cast
 
 #############################################################
 # Common conversion helpers
 time_to_seconds = {"w": 3600 * 24 * 7, "d": 3600 * 24, "h": 3600, "m": 60, "s": 1}
 size_to_bytes = {"m": 1024 * 1024, "k": 1024}
+
+# prototypes
+mqtt_sender: KMQTT
+
+def_config_path = '/etc/smarthome/monitoring/mikrotik/'
+def_config_name = 'mikrotik2mqtt.ini'
+
+#############################################################
+def load_config(in_name: str) -> configparser.ConfigParser:
+    """
+    Will load configuration file, checking for problems beforehand
+    :param in_name: path to config file
+    :return: None
+    """
+    global ARGS, FULL_CONFIG
+
+    conf_file_names = [in_name]
+
+    if not os.path.isabs(in_name):  # adding fallback variants just in case
+        conf_file_names.append(os.path.join(os.path.dirname(sys.argv[0]), in_name))
+        conf_file_names.append(def_config_path + in_name)
+
+    if ARGS.debug:
+        print("+ Loading config:", in_name)
+
+    FULL_CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
+    FULL_CONFIG.read(conf_file_names)
+
+    if not FULL_CONFIG:
+        print("ERROR: Can't read config from: ", ', '.join(conf_file_names), file=sys.stderr)
+        sys.exit(1)
+
+    return FULL_CONFIG
 
 
 #############################################################
@@ -39,613 +69,423 @@ def handle_termination(signum=None, frame=None) -> None:
     if ARGS.debug:
         print("! signal caught. exiting.", file=sys.stderr)
 
-    if Sender:
-        Sender.terminate()
-
     sys.exit(0)
 
 
-#############################################################
-def load_config(in_name: str) -> {}:
-    """
-    Will load configuration file, checking for problems beforehand
-    :param in_name: path to config file
-    :return: None
-    """
-    global ARGS, CONFIG, GLOBAL_CONFIG
-
-    conf_file_names = [in_name]
-
-    if not os.path.isabs(in_name):  # adding fallback variants just in case
-        conf_file_names.append(os.path.join(os.path.dirname(sys.argv[0]), in_name))
-        conf_file_names.append('/etc/smarthome/reporters/' + in_name)
-
-    if ARGS.debug:
-        print("+ Loading config:", in_name)
-
-    GLOBAL_CONFIG = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
-    GLOBAL_CONFIG.read(conf_file_names)
-
-    if GLOBAL_CONFIG is {}:
-        print("ERROR: Can't read config from: ", ', '.join(conf_file_names), file=sys.stderr)
-        sys.exit(1)
-
-    return GLOBAL_CONFIG
-
-
 ########################################
-def conf_vars_is_set(names: list) -> bool:
+def conf_vars_are_set(section: SectionProxy, names: list) -> bool:
     """
     Checks if a list of variables is present and set to true/on in the CONFIG
 
+    :param section: .ini section reference
     :param names: list of config variables to check
     :return: True if present and set ON
     """
-    global CONFIG
-
-    if not CONFIG:
-        return False
-
     for n in names:
-        if n not in CONFIG or not CONFIG[n]:
+        if n not in section or not section[n]:
             return False
 
     return True
 
 
-########################################
-def spawn_sender() -> None:
-    """
-    Will spawn mqtt sender process, checking for various problems
+#############################################################
+class MikrotikQuery:
+    # remap _some_ router's entity names to internal
+    map_health = { "free-memory":"ram-free", "total-memory":"ram-total",
+        "free-hdd-space":"hdd-free", "total-hdd-space":"hdd-total", "bad-blocks":"hdd-bad-blocks"}
 
-    :return: None
-    """
-    global ARGS, CONFIG, Sender
+    def __init__(self, global_ini: configparser.ConfigParser, name: str) -> None:
+        """Creates an interface for calling a specific router device
 
-    if ARGS.debug:
-        print("+ Spawning sender process:", CONFIG['sender'], file=sys.stderr)
+        :param global_ini: ConfigParser instance
+        :param name: .ini section name
+        """
+        self.name: str = name
+        self.ini: configparser.SectionProxy = global_ini[name]
+        self.url: str = self.ini['port'] + "://" + self.ini['ip'] + '/rest'
 
-    # default bufsize may gobble a whole loop of data and do nothing till the next
-    Sender = subprocess.Popen(shlex.split(CONFIG['sender']), bufsize=1,
-                              stdin=subprocess.PIPE,
-                              stdout=(None if ARGS.debug or CONFIG['sender'].find('--debug')
-                                      else subprocess.DEVNULL),
-                              stderr=(None if ARGS.debug or CONFIG['sender'].find('--debug')
-                                      else subprocess.DEVNULL),
-                              text=True)
+        self.last_error: int = 0
+        # self.invalid: bool = False
+        self.session: requests.Session = requests.Session()
+        self.session.auth = (self.ini['user'], self.ini['password'])
+        self.session.headers.update({'Content-Type': 'application/json'})
+        self._ca = self.ini.get('cacert', False)
 
-    if not Sender:
-        print('? ERROR running ', CONFIG['sender'], file=sys.stderr)
-        sys.exit(1)
-
-    if Sender.poll():  # poll() return None if process is still there
-        print('? ERROR with running ', Sender.args, ": exited ",
-              ("abnormally" if Sender.returncode > 0 else "W/O error"),
-              "with rc:", Sender.returncode, file=sys.stderr)
-        sys.exit(1)
+        self.traffic_stats: dict[str, int|float] = {}
 
 
-########################################
-def send_message_raw(*in_msg) -> None:
-    """
-    Sends message as is to the spawned mqtt agent
+    ####################################################
+    def make_topic_path(self, /, *names, ini_key: str = '') -> str:
+        """Constructs full topic name/path from the supplied components
 
-    :param in_msg: str list
-    :return: None
-    """
-    global ARGS, Sender
+        :param ini_key: str: if non-empty then our ini section will be queried for the value
+        :param names: list of plain path components
+        :return: str: Full path
+        """
+        if ini_key != "":
+            if ini_key not in self.ini:
+                raise KeyError(ini_key)
 
-    msg = ''.join(in_msg)
+            return self.ini['topic_root'] + '/' + self.ini[ini_key] + '/' + '/'.join(names)
+        else:
+            return self.ini['topic_root'] + '/' + '/'.join(names)
 
-    try_number = 1
-    while True:
-        if Sender.poll():  # check if it is still alive (not None)
-            spawn_sender()
+
+    ####################################################
+    def _query(self, cmd: str, parameters: None | dict[str, str] = None) -> \
+            tuple[int, list[Any] | dict[str,Any]]:
+        """Uses REST API to query router.
+
+        :param cmd: str: command to send: /ip/filter/...
+        :param parameters: dict: variadic parameters for the command, if needed
+        :return: tuple: (<status code>, <data>)
+
+        Use command in a native form: /x/y/z. Parameters are optional, depending on the command you use.
+        Return value is a tuple where the 1st element is an integer status code
+        and the 2nd is the data returned as is or None in case of error
+        """
+        global ARGS
 
         if ARGS.debug:
-            print('> Sending:', msg)
+            print("D: -> query: '" + self.url + cmd + "'\n")
+
+        if parameters:
+            resp: requests.Response = self.session.post(self.url + cmd, data=json.dumps(parameters),
+                                                    verify=self._ca)
+        else:
+            resp: requests.Response = self.session.post(self.url + cmd, verify=self._ca)
+
+        if ARGS.debug:
+            print("D: <- resp:  '" + resp.text + "'")
 
         try:
-            Sender.stdin.write(msg)
-            Sender.stdin.write("\n")
+            data = resp.json()
+            self.last_error = 0
+            if type(data) is dict:
+                if 'error' in data:
+                    self.last_error = data['error']
+            return self.last_error, data
+        except requests.exceptions.JSONDecodeError:
+            self.last_error = 400
+            return 400, {"detail":"Invalid JSON","error":400,"message":"Bad Request"}
+        except Exception as err:
+            self.last_error = -1
+            return -1, {"detail":str(err),"error":-1,"message":"whoopsie daisy"}
 
-        except:
-            if ARGS.debug:
-                exc_type, exc_val, traceback = sys.exc_info()
 
-                if exc_val:
-                    exc_val = ','.join(exc_val.args)
-                else:
-                    exc_val = 'UNKNOWN REASON'
-                print("! Sending failed (", exc_val, ")", file=sys.stderr)
+    ####################################################
+    def get_hw_status(self) -> dict[str, Any]:
+        """Collects hardware health related data and returns it as a dict with keys:
+        "temperature", "voltage", "ram-free", "ram-total",
+        "hdd-free", "hdd-total", "hdd-bad-blocks", "uptime", "cpu-load".
+        Also, the "status" key will be "OK" in case everything is good or will contain diagnostics
+        :return: dict: collected hardware health data
+        """
 
-            try_number += 1
+        ret: dict[str, Any] = {}
+        status: list[str] = []
 
-            if try_number > 3:
-                try_number = 1
-
-                print("!!! Respawning.", file=sys.stderr)
-                spawn_sender()
+        # temperature and voltage
+        errcode, ans = self._query('/system/health/print')
+        if errcode == 0:
+            for item in cast(list[dict[str,Any]], ans):  # returns list of dict items
+                ret[item["name"]] = float(item["value"])
         else:
-            break
+            status.append("Query for health data: " + ans["detail"])
 
-        # waiting for 3 sec for answer
-        if Sender.stdout:
-            answer = ''
+        errcode, ans = self._query('/system/resource/print')
+        if errcode != 0:  # this is important, so we bail out immediately on error
+            status.append("Query for system resources data: " + ans["detail"])
+            return {"status": '; '.join(status)}
 
-            # gobble previous answers before checking last RC
-            while select.select([Sender.stdout], [None], [None], 3)[0][0] > 0:
-                answer = Sender.stdout.readline()
+        ans = ans[0]  # returns list with a single dict inside
+        for var in ans:
+            val = ans[var]
+            if var in MikrotikQuery.map_health:  # normalizing items names
+                var = MikrotikQuery.map_health[var]
 
-                if ARGS.debug:
-                    print('< Answer:', answer)
+            if var == 'uptime':  # uptime: 8w2d21h37m11s
+                ret[var] = val  # provide the original value as well
+                t = 0
+                # converting to seconds
+                while m := re.match(r'((\d+)([wdhms]))', val):
+                    n = int(m.group(2))
+                    t += n * time_to_seconds[m.group(3)]
+                    val = val[len(m.group(1)):]
+                ret['uptime_sec'] = t
 
-            if not answer.find('"rc":0'):
-                print(time.localtime(), "!ERROR processing packet: ", ''.join(msg),
-                      file=sys.stderr)
+            elif var == 'ram-total' or var == 'ram-free' or var == 'hdd-free' or var == 'hdd-total':
+                ret[var] = int(val)
+
+            elif var == 'cpu-load':
+                ret[var] = int(val)
+                if ret[var] >= 95.0:
+                    status.append('CPU hogged')
+
+            elif var == 'hdd-bad-blocks':
+                ret[var] = int(val)
+                if ret[var] != 0.0:
+                    status.append(val + '% of blocks on flash are bad')
+
+        # Checking if memory and hdd are <=10% of respective totals
+        if ret['ram-free'] <= ret['ram-total'] // 10:
+            status.append('RAM is hogged')
+        if ret['hdd-free'] <= ret['hdd-total'] // 10:
+            status.append('HDD is full')
+
+        if len(status) > 0:
+            ret["status"] = '; '.join(status)
         else:
-            time.sleep(3.0)  # let it process then
+            ret["status"] = 'OK'
+
+        return ret
 
 
-########################################
-def send_message(*in_msg) -> None:
-    """
-    Sends message to the spawned mqtt agent.
-    Pre-processin it, adding quotes to the line-ends, as mqtt agent expecting.
+    ####################################################
+    def get_upgrades(self) -> str:
+        """Will check if there are upgrades available and return text message as a status
+        :return: str: 'OK' if no news
+        """
 
-    :param in_msg: list of strings: parts of the message
-    :return: None
-    """
+        out: list[str] = []
+        errcode, ans = self._query('/system/routerboard/print')
 
-    # our standard sending tool expect either one-line json
-    # or back-slash terminated multiline one
-    msg = re.sub(r"([^\\])\n", "\\1\\\n", "".join(in_msg))
+        if errcode != 0:
+            return ans["detail"]
 
-    send_message_raw(msg)
+        ans = ans[0]
 
+        if ans['current-firmware'] != ans['upgrade-firmware']:
+            out.append("New firmware: " + ans["upgrade-firmware"])
 
-########################################
-def send_message_long(topic: str, *in_msg, retain=False) -> None:
-    """
-    Sends complex message to the mqtt agent
+        # ---------------------------------------
+        errcode, ans = self._query('/system/package/update/print')
 
-    :param topic: str. topic name
-    :param in_msg: str list
-    :param retain: mqtt retain
-    :return: None
-    """
-    global CONFIG
+        if errcode != 0:
+            return ans["detail"]
 
-    # this should be a highly unique stuff really
-    stop_word = CONFIG["stop_word"] if "stop_word" in CONFIG else "3%g3h@544/ujW^r}gj"
+        ans = ans[0]
 
-    send_message_raw('{ "mpublish":"', stop_word, '", "retain":', str(retain).lower(),
-                     ', "topics":[ "', topic, '" ] }\n', ''.join(in_msg), stop_word)
+        if ans['installed-version'] != ans['latest-version']:
+            out.append("Packages upgrade available: " + ans['latest-version'])
+
+        if len(out) > 0:
+            return '; '.join(out)
+
+        return 'OK'
 
 
-########################################
-def send_dict(topic: str, in_dict: dict, retain=False) -> None:
-    """
-    Sends dictionary as a JSON text, quoting what is necessary
-    :param topic: topic name to send to
-    :param in_dict: dictionary to send
-    :param retain: MQTT retain flag
-    :return: None
-    """
+    ####################################################
+    def process_stats(self, data: dict, prefix: str, entity: str, make_delta: bool) -> tuple[str,float]:
+        """Processes new traffic stats package, adding deltas if requested.
 
-    m = "{"
-    for var, val in in_dict.items():
-        m += '"' + var + '":'
-        if type(val) == str:
-            m += '"' + val + '",\n'
+        :param data: dict: The package
+        :param prefix: unique prefix for saving stats from different sources of the same type
+        :param entity: entity name in data package
+        :param make_delta: True to compute difference with the last value
+        :return: tuple[delta name, delta value] or ("",0)
+        """
+        if not make_delta:
+            self.traffic_stats[prefix + entity] = data[entity]
+            return "", 0.0
+
+        val: int = int(data[entity])
+        delta_val: float = 0.0
+        is_speed: bool = entity.endswith('-byte') or entity.endswith('-packet')
+        p_entity = prefix + entity
+
+        if p_entity in self.traffic_stats:  # computing diff
+            delta_val = float(val) - self.traffic_stats[p_entity]
+            if delta_val < 0.0:  # stats reset on router?. just in case
+                delta_val = 0.0
+
+        # Let some deltas be in the form of speed (N/second)
+        if is_speed:
+            delta_val = round(delta_val / float(self.ini['report_interval']), 3)
+            delta_suff = '-speed'
         else:
-            m += str(val) + ',\n'
+            delta_suff = '-delta'
 
-    m = m.rstrip(",\r\n") + '}'
-    send_message_long(topic, m, retain=retain)
-
-
-########################################
-def send_message_short(topic: str, *in_msg, retain=False) -> None:
-    """
-    Sends a (short) message to the mqtt agent
-
-    :param topic: str. topic name
-    :param in_msg: str list
-    :param retain: mqtt retain
-    :return: None
-    """
-    send_message('{ "publish":"', ''.join(in_msg), '", "retain":', str(retain).lower(),
-                 ', "topics":[ "', topic, '" ] }')
+        delta_name = entity + delta_suff
+        self.traffic_stats[prefix + delta_name] = delta_val
+        self.traffic_stats[prefix + entity] = val
+        return delta_name, delta_val
 
 
-####################################################
-def make_topic_path(*names) -> str:
-    """
-    Construct full topic name/path from supplied components
+    ####################################################
+    def get_traffic(self, want_deltas: list[str]) -> dict[str,dict[str,Any]]:
+        """Collects traffic stats and computes deltas if requested.
 
-    :param names: list of path components
-    :return: str: Full path
-    """
-    global CONFIG
+        :param want_deltas: list[str] list of metrics for which to compute delta values on output
+        :return: {"interface name":{<traffic stats>}}
+        """
+        out = {}
+        for interface in self.ini['get_traffic'].split():
+            errcode, ans = self._query('/interface/print',
+                              {"stats-detail":"", "from":interface})
 
-    return CONFIG['topic_root'] + '/' + '/'.join(names)
+            if errcode != 0:
+                continue
+
+            ans = ans[0]
+            ak = list(ans.keys())
+            for var in ak:
+                if var in want_deltas:
+                    dname, dval = self.process_stats(ans, interface, var, True)
+                    ans[dname] = dval
+
+            # determining the /state topic value
+            problems = ''
+            for problems_topic in ['link-downs-delta', 'tx-queue-drop-delta', 'rx-drop-delta', 'tx-drop-delta']:
+                problems_key = interface + problems_topic
+                if problems_key not in self.traffic_stats:
+                    problems = problems + ' WARN: No data for ' + problems_key
+                elif self.traffic_stats[problems_key] > 0:
+                    problems = problems + ' ERRORS on ' + problems_key
+
+            if problems != '':
+                ans['status'] = problems
+            else:
+                ans['status'] = 'OK'
+
+            out[interface] = ans
+
+        return out
 
 
-####################################################
-def open_connection() -> bool:
-    """
-    Prepares ssh connection according to the current router CONFIG
-    Uses global conn_states to store connection data betweeen invocations.
+    ####################################################
+    def get_firewall(self, filter_on: str = "", search: str = "") -> dict[str,Any]:
+        """Will query device for firewall stats with possible filtering.
+        Default filter is STATID: on comment's start
 
-    :return: bool: False for problems
-    """
-    global CONFIG, conn_states
+        :param filter_on: str: which stats item to filter on. optional.
+        :param search: str: the search string to filter on. optional.
+        :return: list of tuples: (<stat_name>, <bytes>, <packets>)
+        """
+        out = {}
+        errcode, ans = self._query("/ip/firewall/filter/print")
+        if errcode != 0:
+            return []
 
-    state = None
-    if not CONFIG['ip'] in conn_states:
-        if ARGS.debug:
-            print("+D: new con:", CONFIG['ip'])
+        for item in cast(list[dict[str,Any]], ans):
+            if filter_on != "":
+                if filter_on not in item:
+                    continue
+                if search == "" or search in item[filter_on]:
+                    out[item[".id"] + '-bytes'] = item["bytes"]
+                    out[item[".id"] + '-packets'] = item["packets"]
+                continue
 
-        state = {
-            "socket": socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-            "session": ssh.session.Session(),
-            "channel": None}
+            if search != "":
+                for k in item.keys():
+                    if type(item[k]) == str and search in item[k]:
+                        out[item[".id"] + '-bytes'] = item["bytes"]
+                        out[item[".id"] + '-packets'] = item["packets"]
+                        continue
+                continue
 
-        conn_states[CONFIG['ip']] = state
-    else:
-        state = conn_states[CONFIG['ip']]
+            # in this part we're getting only tagged items out
+            if "comment" not in item:
+                continue
 
-    # poor man's socket.is_connected()
-    try:
-        state['socket'].send(b'')
-    except:
-        state['socket'].connect((CONFIG['ip'], int(CONFIG['port'])))
+            c = item["comment"].strip().split()
+            if not c[0].startswith("STATID:"):
+                continue
+            sid = c[0][7:]
 
-    try:
-        if not state['session'].is_connected():
-            state['session'].options_set(ssh.options.HOST, CONFIG['ip'])
-            state['session'].options_set(ssh.options.USER, CONFIG['user'])
-            state['session'].options_set_port(int(CONFIG['port']))
-            state['session'].set_socket(state['socket'])
-            state['session'].connect()
-            state['session'].userauth_password(CONFIG['user'], CONFIG['password'])
+            for metric in ['bytes', 'packets']:
+                metric_out_name = sid + '-' + metric
+                out[metric_out_name] = int(item[metric])
 
-        if not state['channel']:
-            state['channel'] = state['session'].channel_new()
+                # computing deltas
+                _, val = self.process_stats({metric_out_name:item[metric]}, "firewall",
+                                               metric_out_name, True)
+                out[metric_out_name + "-delta"] = val
 
-        if not state['channel'].is_open():
-            state['channel'].open_session()
-            # It seems that the shell channel is better to be used,
-            # but it comes with a great burden to deal with mikrotik's banners and ANSI positioning garbage.
-            # Unfortunately, the request_pty_size() with 'dumb' terminal parameter
-            # is making router unwilling to cooperate.
-            # So if I will come up with a nice solution later it may be uncommented again.
-            # But now we will use single-shot request_exec()
-            # state['channel'].request_pty()
-            # state['channel'].request_shell()
+        return out
 
-            # skipping welcome message
-            # prompt = '[' + CONFIG['user'] + '@'
 
-            #while True:
-            #    size, data = state['channel'].read()
-            #    data = str(data, encoding='ascii')
+# end of class MikrotikQuery
 
-            #    a = data.splitlines()
 
-            #    if ARGS.debug:
-            #        print("+D: head:", data);
-            #        print("    last: '" + a[-1] + "'");
-
-            #    if a[-1][0:len(prompt)] == prompt:
-            #        break
-
-    except Exception as e:
-        print("Some problem in open_connection():", e.args)
-        return False
-
-    return True
+routers: list[MikrotikQuery] = []
 
 
 ####################################################
-def send_command(cmd: str) -> None:
-    """
-    Sends command to remote side, output is not expected or should be processed outide
-
-    :param cmd: str
-    :return: None
-    """
-    global CONFIG, conn_states
-
-    if ARGS.debug:
-        print("+D: sending:", cmd)
-
-    open_connection()  # redo the channel
-
-    state = conn_states[CONFIG['ip']]
-    state['channel'].request_exec(cmd)
-
-
-####################################################
-def get_command_output(cmd: str) -> list:
-    """
-    Sends request via ssh session and reads output after
-
-    :param cmd: str: command to send
-    :return: list: list of command's output lines
-    """
-    global CONFIG, conn_states
-
-    # Which prompt to expect as an end of a command output
-    #prompt = '[' + CONFIG['user'] + '@'
-
-    if ARGS.debug:
-        print("+D: sending:", cmd)
-
-    open_connection()  # redo the channel
-
-    state = conn_states[CONFIG['ip']]
-    state['channel'].request_exec(cmd)
-
-    # If we're in the shell channel - use write()
-    #state['channel'].write(cmd + '\r\n')
-
-    size, data = state['channel'].read()
-
-    ret = ''
-    while size > 0:
-        data = str(data, encoding='ascii')
-        ret += data
-
-        if ARGS.debug:
-            print("+D: recv:", data)
-
-        #if data.rfind(prompt) != -1:  # Checking for the prompt - end of cmd output. But it's for shell channel only
-        #   break
-
-        time.sleep(1)  # Wait so there will be more data to read next time. Mikrotik's is not the fastest CPU.
-        size, data = state['channel'].read()
-
-    # For the one-shot .request_exec(cmd) we can't re-use this channel anymore
-    state['channel'].close()
-    state['channel'] = None
-
-    ret = ret.splitlines()
-
-    while True:
-        if ret[-1].strip() != '':  # Usually there is empty line at the end of the output.
-            break
-
-        ret.pop()
-
-    return ret
-
-
-####################################################
-def values_are_different(ans: list, old_var: str, new_var: str) -> str:
-    """
-    Compares values of two variable names from the given list
-    and reports if 2nd var value is different
-
-    :param ans: list: list of strings in the form of "varname:value"
-    :param old_var: "old" variable name
-    :param new_var: "new" variable name
-    :return: str: empty if no difference, "new" var value if there is
-    """
-
-    old_val = ''
-    new_val = ''
-
-    for line in ans:
-        var, val = line.strip().split(':', 1)
-
-        if var == old_var:
-            old_val = val
-            if new_val:
-                break
-
-        elif var == new_var:
-            new_val = val
-            if old_val:
-                break
-
-    if old_val != '' and new_val != '' and old_val != new_val:
-        return new_val
-
-    return ''
-
-
-####################################################
-def get_system_health() -> str:
-    """
-    Retrieves hardware-relate information like PSU voltage and device temperature
+def post_system_status(dev: MikrotikQuery) -> str:
+    """Retrieves general hardware status information like device temperature and RAM usage
 
     :return: empty string if no problems
     """
-    global CONFIG
+    ans = dev.get_hw_status()
 
-    ans = get_command_output('/system health print')
-    #      voltage: 14.1V
-    #  temperature: 44C
+    status: list[str] = []
+    if ans["status"] != "OK":
+        status += ans["status"]
 
-    if not ans:
-        return ''
+    to_send: dict[str, Any] = {}
 
-    status = ""
-    for line in ans:
-        d = line.strip().rstrip('VC').split(':')
+    for stat_name in ans.keys():
+        if stat_name in ["temperature", "voltage"]:
+            if conf_vars_are_set(dev.ini, ['get_' + stat_name, 'topic_' + stat_name]):
+                if stat_name == "temperature" and int(ans[stat_name]) >= 50:
+                    status.append("Overheating(>=50)")
+                mqtt_sender.send_json_short(dev.make_topic_path(ini_key='topic_' + stat_name),
+                                            str(ans[stat_name]))
 
-        d[1] = d[1].strip()
+        if stat_name == 'uptime':  # uptime: 8w2d21h37m11s
+            to_send[stat_name] = ans[stat_name]
+            t = 0  # converting to seconds
 
-        if d[0] == 'temperature' and conf_vars_is_set(['get_temperature', 'topic_temperature']):
-            if int(d[1]) >= 50:
-                status = "Overheating(>=50)"
-            send_message_short(make_topic_path(CONFIG['topic_temperature']), d[1])
-
-        if d[0] == 'voltage' and conf_vars_is_set(['get_voltage', 'topic_voltage']):
-            send_message_short(make_topic_path(CONFIG['topic_voltage']), d[1])
-
-    return status
-
-
-####################################################
-def get_system_resource() -> Optional[str]:
-    """
-    Issues /system resource print
-    to get detailed information about the resource utilization
-
-    :return: None for processing problems, string with additional status for router's condition(s)
-    """
-    global CONFIG
-
-    ans = get_command_output('/system resource print')
-  
-    if not ans:
-        return None
-
-    to_send: dict[str] = {}
-
-    for line in ans:
-        var, val = line.strip().split(':', 1)
-        val = val.lstrip()
-
-        if var == 'uptime':  # uptime: 8w2d21h37m11s
-            to_send[var] = val
-            t = 0
-
+            val = ans[stat_name]
             while m := re.match(r'((\d+)([wdhms]))', val):
                 n = int(m.group(2))
                 t += n * time_to_seconds[m.group(3)]
                 val = val[len(m.group(1)):]
             to_send['uptime_sec'] = t
 
-        elif var == 'total-memory' or var == 'free-memory' or \
-             var == 'free-hdd-space' or var == 'total-hdd-space':
-            # total-memory: 128.0MiB, free-memory: 96.9MiB
-            # free-hdd-space: 2032.0KiB, total-hdd-space: 16.0MiB
-            to_send[var] = float(val[:-3]) * size_to_bytes[val[-3:-2].lower()]
+        elif stat_name in ['ram-total', 'ram-free', 'hdd-free', 'hdd-total', 'hdd-bad-blocks', 'cpu-load']:
+            to_send[stat_name] = ans[stat_name]
 
-        elif var == 'cpu-load':  # cpu-load: 9%
-            to_send[var] = float(val[0:-1])  # probably int though
+    mqtt_sender.send_json_long(dev.make_topic_path('system/resources'), json.dumps(to_send))
 
-        elif var == 'bad-blocks':  # bad-blocks: 0%
-            to_send[var] = float(val[0:-1])
+    if 'hdd-bad-blocks' in to_send and to_send['hdd-bad-blocks'] != 0.0:
+        status.append(str(to_send['hdd-bad-blocks']) + '% of blocks on flash are bad')
 
-        else:
-            if var not in ['version', 'build-time', 'factory-software', 'cpu', 'cpu-count',
-                    'cpu-frequency', 'architecture-name', 'board-name', 'platform']:
-                to_send[var] = val
-            # version: 6.49.18 (long-term)
-            # build-time: Feb/27/2025 15:58:10
-            # factory-software: 6.44.6
-            # cpu: MIPS 74Kc V5.0
-            # cpu-count: 1
-            # cpu-frequency: 720MHz
-            # write-sect-since-reboot: 919169
-            # write-sect-total: 34389505
-            # architecture-name: mipsbe
-            # board-name: hAP ac
-            # platform: MikroTik
-
-    send_dict(make_topic_path('system/resources'), to_send, True)  # Let's keep data
-
-    status = ""
-    if to_send['bad-blocks'] != 0.0:
-        status += str(to_send['bad-blocks']) + '% of blocks on flash are bad;'
     # Checking if memory and hdd are <=10% of total amount
-    if to_send['free-memory'] <= to_send['total-memory'] / 10.0:
-        status += 'RAM is hogged;'
-    if to_send['free-hdd-space'] <= to_send['total-hdd-space'] / 10.0:
-        status += 'HDD is full;'
+    if to_send['ram-free'] <= to_send['ram-total'] / 10.0:
+        status.append('RAM is hogged')
+
+    if to_send['hdd-free'] <= to_send['hdd-total'] / 10.0:
+        status.append('HDD is full')
+
     if to_send['cpu-load'] >= 95.0:
-        status += 'CPU hogged;'
+        status.append('CPU hogged')
 
-    if status:
-        return status[:-1]
-
-    return status
+    return '; '.join(status)
 
 
 ####################################################
-def get_upgrades() -> str:
+def post_upgrades(dev: MikrotikQuery) -> None:
+    """Will check if upgrades available and will post the news to the configured topic
+
+    :return: None
     """
-    Will check if upgrades available and will post the news to the configured topic
-    or return data as status othewise
-    :return: str news if any
-    """
-    global CONFIG
 
-    out = []
-    ans = get_command_output('/system routerboard print')
-    #  current-firmware: 6.48.3
-    #  upgrade-firmware: 6.48.3
+    if not conf_vars_are_set(dev.ini, ['topic_upgrades', 'get_updates']):
+        return
 
-    if (newfw := values_are_different(ans, 'current-firmware', 'upgrade-firmware')) != '':
-        out.append("New firmware: " + newfw)
+    ans = dev.get_upgrades()
 
-    # ---------------------------------------
-    ans = get_command_output('/system package update print')
-    #  installed-version: 6.48.3
-    #     latest-version: 6.48.4
-
-    if (newpkg := values_are_different(ans, 'installed-version', 'latest-version')) != '':
-        out.append("Packages upgrade available: " + newpkg)
-
-    if len(out) == 0:
-        return ''
-
-    if 'topic_upgrades' in CONFIG:
-        send_message_short(make_topic_path(CONFIG['topic_upgrades']), ', '.join(out))
-        return ''
-
-    return ','.join(out)
+    mqtt_sender.send_json_short(dev.make_topic_path(ini_key='topic_upgrades'), ans)
 
 
 ####################################################
-def set_tstats(entity: str, val: int, is_speed: bool, store_prefix: str = '') -> str:
+def post_traffic(dev: MikrotikQuery) -> None:
+    """Goes through the list of interfaces from .ini and requests statistics for each of them
+
+    :return: None
     """
-    Helper to deal with traffic stats deltas
-
-    :param entity: The key to traffic_stats
-    :param val: New value to store
-    :param is_speed: True if this measurement is about the speed, not a count of smth
-    :param store_prefix: str String to use as a prefix for stored id, to prevent unintended replacememts
-    :return: json fragment for posting to MQTT
-    """
-    global CONFIG
-
-    delta_val = 0
-
-    tstats_key = store_prefix + entity
-    if tstats_key in traffic_stats:  # computing diff
-        delta_val = float(val) - traffic_stats[tstats_key]
-        if delta_val < 0.0:  # stats reset on router?. just in case
-            delta_val = 0.0
-
-    # Let some deltas be in the form of speed (N/second)
-    if is_speed:
-        delta_val = round(float(delta_val) / float(CONFIG['report_interval']), 3)
-
-    traffic_stats[tstats_key] = int(val)
-    traffic_stats[tstats_key + '-delta'] = int(val)
-
-    if is_speed:
-        delta_suff = '-speed'
-    else:
-        delta_suff = '-delta'
-
-    return '"' + entity + delta_suff + '":' + str(delta_val) + ','
-
-
-####################################################
-def get_traffic() -> bool:
-    """
-    Goes through the list of interfaces from .ini and requests statistics for each of them
-
-    :return: bool: False for problems
-    """
-    global CONFIG, traffic_stats
 
     # Using traffic_stats cache will add computed deltas for these parameters to better show variations
     want_deltas = ['rx-byte', 'tx-byte', 'rx-error', 'tx-error',
@@ -653,304 +493,119 @@ def get_traffic() -> bool:
                    'fp-rx-byte', 'fp-tx-byte', 'fp-rx-packet', 'fp-tx-packet',
                    'link-downs', 'tx-queue-drop']
 
-    for interface in CONFIG['get_traffic'].split():
-        ans = get_command_output('/interface print stats-detail from=' + interface)
-        # Flags: D - dynamic, X - disabled, R - running, S - slave
-        # 0  RS name="wlan1" last-link-up-time=sep/11/2024 00:55:09 link-downs=0 rx-byte=17 503 683 164
-        # ...
-        # Flags: D - dynamic, X - disabled, R - running, S - slave
-        # 0  R  ;;; defconf
-        #   name="bridge-LAN" last-link-up-time=sep/11/2024 00:55:02 link-downs=0
-        #   rx-byte=152 316 481 201 tx-byte=1 255 171 362 108
-        #   rx-packet=642 466 564 tx-packet=983 478 441 rx-drop=0 tx-drop=0
-        #   tx-queue-drop=0 rx-error=0 tx-error=0 fp-rx-byte=0 fp-tx-byte=0
-        #   fp-rx-packet=0 fp-tx-packet=0
+    ans = dev.get_traffic(want_deltas)
 
-        if not ans:
-            continue
+    for interface in ans.keys():
+        status: str = ans[interface]['status']
+        del ans[interface]['status']  # we send it to separate topic
+        mqtt_sender.send_json_short(dev.make_topic_path(interface.lower(), ini_key='topic_traffic'),
+                                    json.dumps(ans[interface]))
 
-        ans.pop(0)  # removing header
-        # adding flags as a variable
-        ans = re.sub(r'^\s*\d+\s*([A-Z]+)\s+(;;;.*?)?(name=")', r'flags=\1 \3', ' '.join(ans))
-
-        # and converting all to json
-        ans = re.sub(r'\s+([-\w]+=)', r'\n\1', ans).splitlines()  # split to separate lines for easy processing
-
-        out = '{'
-        for line in ans:
-            var, val = line.split('=')
-
-            val = val.strip()
-            if re.match(r'[\d\s]+$', val):   # value is digits only
-                val = val.replace(' ', '')
-
-                # adding deltas
-                if var in want_deltas:
-                    out += set_tstats(var, int(val), var.endswith('-byte') or var.endswith('-packet'), interface)
-
-            elif val[0] != '"':  # value is not a number
-                val = '"' + val + '"'
-
-            out += '"' + var + '":' + val + ','
-
-        send_message_short(make_topic_path(CONFIG['topic_traffic'], interface.lower()),
-                           out.rstrip(',').replace('"', r'\"'), '}')
-
-        # determining the /state topic value
-        problems = ''
-        for problems_topic in ['link-downs-delta', 'tx-queue-drop-delta', 'rx-drop-delta', 'tx-drop-delta']:
-            problems_key = interface + problems_topic
-            if problems_key not in traffic_stats:
-                problems = problems + ' WARN: No data for ' + problems_key
-            elif traffic_stats[problems_key] > 0:
-                problems = problems + ' ERRORS on ' + problems_key
-
-        send_message_short(make_topic_path(CONFIG['topic_traffic'], interface.lower() + '/state'),
-                           'OK' if problems == '' else problems)
-
-    return True
+        mqtt_sender.send_json_short(dev.make_topic_path(interface.lower() + '/state',
+                                                        ini_key='topic_traffic'),
+                           status)
 
 
 ####################################################
-def firewall_where(query: str, options: list) -> list:
-    """
-    Will process free query with the fixed prefix:
-    /ip firewall filter print stats without-paging where QUERY
-    The usual output looks like is:
-    Flags: X - disabled, I - invalid, D - dynamic
-     #     CHAIN                                                ACTION       BYTES         PACKETS
-     0    ;;; Disable inet for some source addresses
-          forward                                                reject           0               0
-     1    ;;; Drop tries to reach not public addresses from LAN
-          forward                                                drop         73 643           1 106
-    10    ;;; WAN: TCP - DoS Attack Supression - Tarpit BlackList
-          inet-in                                                tarpit            0               0
-
-    :param: query: str - which query to run
-    :param: options: list - processing flags:
-            'pack' - pack all line's data into single output record
-    :return: list of sets: (name, bytes, packets)
-    """
-
-    ans = get_command_output('/ip firewall filter print stats without-paging where ' + query)
-    ans.pop(0)
-    ans.pop(0)
-    name = ''  # field name if set
-    ret = []  # return stats list
-    for line in ans:
-        if re.match(r'\s*\d+\s*', line):  # commentary line
-            if m := re.search(r'STATID:\s*([-\w]+)', line):  # got a clean json field name
-                name = m.group(1)
-
-                if ARGS.debug:
-                    print('+D STATID:', name)
-            else:
-                name = ''
-        else:  # data line
-            data = re.sub(r'(\d)\s(\d)', r'\1\2', line).split()  # culling readability spaces in numbers
-
-            if 'pack' in options:
-                if len(ret) == 0:
-                    ret.append(['', data[2], data[3]])  # bytes/packets
-                else:
-                    ret[0][1] += int(data[2])
-                    ret[0][2] += int(data[3])
-            else:
-                ret.append([name, data[2], data[3]])
-
-    return ret
-
-
-####################################################
-def firewall_by_id() -> str:
-    """
-    2nd level of firewall check routines:
-    Will find all firewall rules having the STATID:field_name tags in comments
-    and produce nice json out of it
-
-    :return: str: json-ready list of fields w/o leading/ending brakets
-    """
-    global CONFIG
-
-    result = firewall_where('comment~"STATID:"', [])
-    ret = ''
-    for i in result:
-        name = i[0] + '-bytes'
-        ret += ' "' + name + '":' + str(i[1]) + ', ' + set_tstats(name, int(i[1]), False)
-        name = i[0] + '-packets'
-        ret += ' "' + name + '":' + str(i[2]) + ', ' + set_tstats(name, int(i[2]), False)
-
-    return ret.rstrip(',')
-
-
-####################################################
-def check_firewall() -> None:
-    """
-    Starting point for firewall checks
+def post_firewall(dev: MikrotikQuery) -> None:
+    """Starting point for firewall checks
 
     :return: None
     """
 
     msgs = {}
-    if conf_vars_is_set(['get_firewall_by_id']):
-        msgs[CONFIG['get_firewall_by_id']] = firewall_by_id()
-
-    for key in CONFIG:
-        if key[0:18] == 'get_firewall_where':
-            flags = CONFIG[key].split(',')
-            query = flags.pop()
-            flags.append('pack')
-
-            data = firewall_where(query, flags)
-
-            if m := re.match(r'name:([^,\s]+)]', ','.join(flags)):
-                name = m.group(0)
-            else:
-                name = key[18:-1]
-
-            if m := re.match(r'topic:([^,\s]+)]', ','.join(flags)):
-                topic = m.group(0)
-            else:
-                topic = CONFIG['get_firewall_by_id']
-
-            if topic not in msgs:
-                msgs[topic] = ''
-
-            msgs[topic] += '"' + name + '-bytes":' + str(data[1]) + ', "' + \
-                           name + '-packets":' + str(data[2]) + ','
+    if 'get_firewall_by_id' in dev.ini:
+        msgs[dev.ini['get_firewall_by_id']] = json.dumps(dev.get_firewall())
 
     for topic in msgs:
         if msgs[topic].strip() == '':
             continue
 
-        send_message_short(make_topic_path(topic),
-                           '{' + re.sub(r'"', r'\"', msgs[topic]) + '}', retain=False)
+        mqtt_sender.send_json_short(dev.make_topic_path(topic),
+                           msgs[topic], retain=False)
 
-        # for now just send vanishing 'OK'
-        send_message_short(make_topic_path(topic + '/state'), 'OK', retain=False)
+        # for now just send a vanishing 'OK'
+        mqtt_sender.send_json_short(dev.make_topic_path(topic + '/state'),
+                                    'OK', retain=False)
 
 
 ####################################################
-def poll_device() -> None:
-    """
-    Do all configured data retrievals for the single device.
-    CONFIG must be set to the device's sectio in .ini
-
+def poll_device(dev: MikrotikQuery) -> None:
+    """Do all configured data retrievals for the single device.
     :return: None
     """
-    global CONFIG
-
     status: list[str] = []  # functions will return text describing any problems or empty for none
-    if conf_vars_is_set(['get_voltage', 'topic_voltage'])\
-            or conf_vars_is_set(['get_temperature', 'topic_temperature']):
-        rc = get_system_health()
-        if rc:
-            status.append(rc)
-
-    if conf_vars_is_set(['get_updates']):
-        rc = get_upgrades()
-        if rc:
-            status.append(rc)
-
-    if conf_vars_is_set(['get_traffic', 'topic_traffic']):
-        get_traffic()
-
-    rc = get_system_resource()
+    rc = post_system_status(dev)
     if rc:
         status.append(rc)
 
-    check_firewall()
+    if conf_vars_are_set(dev.ini, ['get_updates']):
+        post_upgrades(dev)
 
-    send_message_short(CONFIG['topic_root'], ';'.join(status) if status else 'OK', retain=True)
-    send_message_short(make_topic_path('updated'), Dates_json, retain=True)
+    if conf_vars_are_set(dev.ini, ['get_traffic', 'topic_traffic']):
+        post_traffic(dev)
+
+    post_firewall(dev)
+
+    mqtt_sender.send_json_short(dev.ini['topic_root'], ';'.join(status) if status else 'OK', retain=True)
+    mqtt_sender.send_json_short(dev.make_topic_path('updated'), Dates_json, retain=True)
 
 
 ####################################################
 # MAIN
-global GLOBAL_CONFIG, Sender
-
-def_config_path = '/etc/smarthome/monitoring/mikrotik/mikrotik2mqtt.ini'  # default
+global FULL_CONFIG
 
 parser = argparse.ArgumentParser(
     description='Queries MikroTik router(s) for statistics data and pushes it to the mqtt agent. ' +
                 'Copyright by Andrej Pakhutin (pakhutin <at> gmail). ' +
-                'V1.110')
-parser.add_argument('-c', '--config', dest='config_path', action='store', default=def_config_path,
-                    help='path to non-default config file')
+                'V2.0.1')
+parser.add_argument('-c', '--config', dest='config_path', action='store',
+                    default=def_config_path + def_config_name,
+                    help='path to a non-default config file')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', default=False,
                     help='debug mode')
 parser.add_argument('-l', '--loop', dest='loop', action='store_true', default=False,
                     help='Loop forever, sleeping report_interval(see .ini) seconds between passes.')
-# parser.add_argument('action', nargs='?', default='', help='non-default action name to run')
 
 ARGS = parser.parse_args()
 
-CONFIG = load_config(ARGS.config_path)['DEFAULT']
+CONFIG_DEFAULT = load_config(ARGS.config_path)['DEFAULT']
 
 # mqtt sender script tend to hang up (why no SIGPIPE on stdin read?) if we exit hastily.
 # Trying to avoid this.
 signal.signal(signal.SIGINT, handle_termination)
 signal.signal(signal.SIGTERM, handle_termination)
 
-conn_states = {}
-traffic_stats = {}
-
-spawn_sender()
-
-if ARGS.debug:
-    if not Sender:
-        sys.exit(1)
-
-    print('sender:', Sender.args)
+mqtt_sender = KMQTT(CONFIG_DEFAULT["sender"], True, ARGS.debug)
 
 ##################################
 # set necessary defaults
-if 'report_interval' not in CONFIG:
-    CONFIG['report_interval'] = '60'
+if 'report_interval' not in CONFIG_DEFAULT:
+    CONFIG_DEFAULT['report_interval'] = '60'
 
 # will be used globally in misc topics posts to show last data times
 Dates_json = ''
 
+for router in FULL_CONFIG:
+    if router == 'DEFAULT':
+        continue
+
+    if FULL_CONFIG[router].getboolean('disabled', False):
+        continue
+
+    routers.append(MikrotikQuery(FULL_CONFIG, router))
+
 ##################################
 while True:  # main loop
     Dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
-    Dates_json = Dates_json.replace(r'"', r'\"')
 
-    for router_section in GLOBAL_CONFIG:
-        if router_section == 'DEFAULT':
-            continue
-
-        # For the simplicity, the CONFIG section of a specific router have been made global,
-        # so all data retrieval functions rely on it to be set to the current .ini section
-        CONFIG = GLOBAL_CONFIG[router_section]
-
-        if conf_vars_is_set(['disabled']):
-            continue
-
-        if not open_connection():
-            continue
-
-        poll_device()
+    for router in routers:
+        poll_device(router)
 
     if not ARGS.loop:
         break
 
-    time.sleep(float(CONFIG['report_interval']))
+    time.sleep(float(CONFIG_DEFAULT['report_interval']))
 
 # Wrapping up
-try:
-    Sender.communicate(input='\n\n{ "cmd":"exit" }\n')
-
-    Sender.wait(timeout=15.0)
-except:
-    pass
-
-Sender.terminate()
-
-for router_section in GLOBAL_CONFIG:
-    if router_section == 'DEFAULT':
-        continue
-
-    CONFIG = GLOBAL_CONFIG[router_section]
-
-    send_command('/quit')
+mqtt_sender.terminate()
