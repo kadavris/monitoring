@@ -4,7 +4,6 @@ The main feature is the KMQTT class that provides simple interface to the MQTT a
 """
 import base64
 import json
-import re
 import select
 import shlex
 import subprocess
@@ -67,7 +66,7 @@ class KMQTT:
                 sys.exit(1)
 
         if sys.platform.startswith("linux"):
-            self._poller = select.poll()
+            self._poller: select.poll = select.poll()
             self._poller.register(self._pipe.stdout.fileno(),
                                   select.EPOLLIN | select.EPOLLERR | select.EPOLLHUP | select.EPOLLRDHUP)
 
@@ -78,17 +77,17 @@ class KMQTT:
         if self._pipe:
             try:
                 self._pipe.communicate(input='\n\n{ "cmd":"exit" }\n')
-            except:
+            except:  # noqa: E722
                 pass
 
             try:
                 self._pipe.wait(timeout=5.0)
-            except:
+            except:  # noqa: E722
                 pass
 
             try:
                 self._pipe.terminate()
-            except:
+            except:  # noqa: E722
                 pass
 
         self._pipe = None
@@ -106,7 +105,7 @@ class KMQTT:
         answer = None
         ready = False
         if sys.platform.startswith("linux"):
-            evt = self._poller.poll(3000)
+            evt: list[tuple[int, int]] = self._poller.poll(3000)
             if len(evt) != 0:
                 if evt[0][1] & select.EPOLLIN:
                     ready = True
@@ -171,7 +170,7 @@ class KMQTT:
 
                 try_number = 1
                 if self._debug:
-                    print("! KMQTT Respawning sender.", file=sys.stderr)
+                    print("! KMQTT Respawning sender after a lingering failure to communicate.", file=sys.stderr)
                 self._spawn_sender(True)
 
             if not self._pipe or self._pipe.poll():  # check if it is still alive (not None)
@@ -179,6 +178,7 @@ class KMQTT:
                 continue
 
             try:
+                self._pipe.stdout.flush()  # clear previous conversation remains
                 self._pipe.stdin.write(msg)
                 self._pipe.stdin.write("\n")
             except Exception:
@@ -193,7 +193,7 @@ class KMQTT:
 
             try:
                 j = json.loads(answer)
-                if not "rc" in j:
+                if "rc" not in j:
                     if self._debug:
                         print("! KMQTT Got an improper answer: ", answer, file=sys.stderr)
                     break
@@ -212,9 +212,8 @@ class KMQTT:
 
     ########################################
     def send(self, *msg: str) -> None:
-        """
-        Sends a plain message to the spawned mqtt agent. Fixes it to be one-line.
-        :param in_msg: list of strings: parts of the whole message
+        """Sends raw, message to mqtt agent.
+        :param msg: list of strings: parts of the whole message
         :return: None
         """
 
@@ -222,22 +221,25 @@ class KMQTT:
             print('> KMQTT send():', ''.join(msg))
 
         # our standard sending tool expect either one-line JSON or back-slash terminated multiline one
-        self._send_prepared(re.sub(r"([^\\])\n", "\\1\\\n", "".join(msg)))
+        self._send_prepared("".join(msg))
 
 
     ########################################
     def send_json_long(self, topic: str, *msg: str, retain: bool=False,
-                  stop_word: str = "NDIuIDQyIGlzIHRoZSBhbnN3ZXIK") -> None:
-        """
-        Sends multiline message
+                  stop_word: str = '') -> None:
+        """Sends big/multiline message, using JSON package header as required by mqtt-tool.
+        User message is passed raw.
         :param topic: topic name
         :param msg: list of strings
         :param retain: bool: MQTT retain flag
-        :param stop_word: str: optional stop word to use as an EOM indicator
+        :param stop_word: str: stop word to use as an EOM indicator. If empty, the default stop word is used
         :return: None
         """
         if self._debug:
             print('> KMQTT send_json_long():', ''.join(msg))
+
+        if stop_word == '':
+            stop_word = 'NDIuIDQyIGlzIHRoZSBhbnN3ZXIK'
 
         self._send_prepared(f'{{ "mpublish":"{stop_word}", "retain":{str(retain).lower()},'
                          f' "topics":["{topic}"] }}\n' + ''.join(msg) + stop_word)
@@ -245,8 +247,8 @@ class KMQTT:
 
     ########################################
     def send_json_short(self, topic: str, *msg: str, retain: bool=False) -> None:
-        """Posts a short, preferably one-line message to a single topic.
-         Double quotes are being escaped automatically.
+        """Posts a short message to a single topic. Wraps it in a JSON package as required by mqtt-tool.
+        User message is automatically encoded to pass unharmed.
 
         :param topic: str. topic name
         :param msg: str list
