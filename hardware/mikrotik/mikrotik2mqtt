@@ -1,8 +1,8 @@
 #!/bin/python
 """
-This script queries Mikrotik router for various data and pushes it to the mqtt agent.
+This script queries MikroTik router for various data and pushes it to the mqtt agent.
 RouterOS V7+ required with REST API enabled.
-Copyright by Andrej Pakhutin (pakhutin <at> gmail)
+Copyright by Andrej Pakhutin (pakhutin <at> Gmail)
 http://github.com/kadavris/monitoring
 License: see accompanying LICENSE file in repo.
 """
@@ -29,6 +29,7 @@ mqtt_sender: KMQTT
 
 def_config_path = '/etc/smarthome/monitoring/mikrotik/'
 def_config_name = 'mikrotik2mqtt.ini'
+
 
 #############################################################
 def load_config(in_name: str) -> configparser.ConfigParser:
@@ -59,11 +60,8 @@ def load_config(in_name: str) -> configparser.ConfigParser:
 
 
 #############################################################
-def handle_termination(signum=None, frame=None) -> None:
-    """
-    Will (safely) handle termination. Stopping sender agend on its rails.
-    :param signum: NOT Used
-    :param frame: NOT Used
+def handle_termination(*_) -> None:
+    """Will (safely) handle termination by a signal.
     :return: None
     """
     if ARGS.debug:
@@ -74,12 +72,11 @@ def handle_termination(signum=None, frame=None) -> None:
 
 ########################################
 def conf_vars_are_set(section: SectionProxy, names: list) -> bool:
-    """
-    Checks if a list of variables is present and set to true/on in the CONFIG
+    """Checks if a list of variables is present and set to non-empty and not false/off in the CONFIG
 
     :param section: .ini section reference
     :param names: list of config variables to check
-    :return: True if present and set ON
+    :return: True if present and enabled
     """
     for n in names:
         if n not in section or not section[n]:
@@ -91,8 +88,8 @@ def conf_vars_are_set(section: SectionProxy, names: list) -> bool:
 #############################################################
 class MikrotikQuery:
     # remap _some_ router's entity names to internal
-    map_health = { "free-memory":"ram-free", "total-memory":"ram-total",
-        "free-hdd-space":"hdd-free", "total-hdd-space":"hdd-total", "bad-blocks":"hdd-bad-blocks"}
+    map_health = {"free-memory": "ram-free", "total-memory": "ram-total",
+                  "free-hdd-space": "hdd-free", "total-hdd-space": "hdd-total", "bad-blocks": "hdd-bad-blocks"}
 
     def __init__(self, global_ini: configparser.ConfigParser, name: str) -> None:
         """Creates an interface for calling a specific router device
@@ -111,8 +108,7 @@ class MikrotikQuery:
         self._session.headers.update({'Content-Type': 'application/json'})
         self._ca = self.ini.get('cacert', False)
 
-        self.traffic_stats: dict[str, int|float] = {}
-
+        self.traffic_stats: dict[str, int | float] = {}
 
     ####################################################
     def make_topic_path(self, /, *names, ini_key: str = '') -> str:
@@ -139,7 +135,7 @@ class MikrotikQuery:
 
     ####################################################
     def _query(self, cmd: str, parameters: None | dict[str, str] = None) -> \
-            tuple[int, list[Any] | dict[str,Any]]:
+            tuple[int, list[Any] | dict[str, Any]]:
         """Uses REST API to query router.
 
         :param cmd: str: command to send: /ip/filter/...
@@ -157,9 +153,9 @@ class MikrotikQuery:
 
         if parameters:
             resp: requests.Response = self._session.post(self.url + cmd, data=json.dumps(parameters),
-                                                         verify=self._ca)
+                                                         verify=self._ca, timeout=10.0)
         else:
-            resp: requests.Response = self._session.post(self.url + cmd, verify=self._ca)
+            resp: requests.Response = self._session.post(self.url + cmd, verify=self._ca, timeout=10.0)
 
         if ARGS.debug:
             print("D: <- resp:  '" + resp.text + "'")
@@ -173,10 +169,10 @@ class MikrotikQuery:
             return self.last_error, data
         except requests.exceptions.JSONDecodeError:
             self.last_error = 400
-            return 400, {"detail":"Invalid JSON","error":400,"message":"Bad Request"}
+            return 400, {"detail": "Invalid JSON", "error": 400, "message": "Bad Request"}
         except Exception as err:
             self.last_error = -1
-            return -1, {"detail":str(err),"error":-1,"message":"whoopsie daisy"}
+            return -1, {"detail": str(err), "error": -1, "message": "whoopsie daisy"}
 
 
     ####################################################
@@ -194,7 +190,7 @@ class MikrotikQuery:
         # temperature and voltage
         errcode, ans = self._query('/system/health/print')
         if errcode == 0:
-            for item in cast(list[dict[str,Any]], ans):  # returns list of dict items
+            for item in cast(list[dict[str, Any]], ans):  # returns list of dict items
                 ret[item["name"]] = float(item["value"])
         else:
             status.append("Query for health data: " + ans["detail"])
@@ -282,22 +278,22 @@ class MikrotikQuery:
 
 
     ####################################################
-    def process_stats(self, data: dict, prefix: str, entity: str, make_delta: bool) -> tuple[str,float]:
-        """Processes new traffic stats package, adding deltas if requested.
+    def process_stats(self, data: dict[str, Any], prefix: str, entity: str, make_delta: bool) -> tuple[str, float | int]:
+        """Registers new value of the data[entity] in stats, computing delta if requested.
 
         :param data: dict: The package
         :param prefix: unique prefix for saving stats from different sources of the same type
         :param entity: entity name in data package
         :param make_delta: True to compute difference with the last value
-        :return: tuple[delta name, delta value] or ("",0)
+        :return: tuple[delta name, delta value] or ("",0) if no deltas wanted
         """
         if not make_delta:
             self.traffic_stats[prefix + entity] = data[entity]
             return "", 0.0
 
         val: int = int(data[entity])
-        delta_val: float = 0.0
         is_speed: bool = entity.endswith('-byte') or entity.endswith('-packet')
+        delta_val: float | int = 0
         p_entity = prefix + entity
 
         if p_entity in self.traffic_stats:  # computing diff
@@ -310,16 +306,17 @@ class MikrotikQuery:
             delta_val = round(delta_val / float(self.ini['report_interval']), 3)
             delta_suff = '-speed'
         else:
+            delta_val = int(delta_val)
             delta_suff = '-delta'
 
         delta_name = entity + delta_suff
         self.traffic_stats[prefix + delta_name] = delta_val
-        self.traffic_stats[prefix + entity] = val
+        self.traffic_stats[p_entity] = val
         return delta_name, delta_val
 
 
     ####################################################
-    def get_traffic(self, want_deltas: list[str]) -> dict[str,dict[str,Any]]:
+    def get_traffic(self, want_deltas: list[str]) -> dict[str, dict[str, Any]]:
         """Collects traffic stats and computes deltas if requested.
 
         :param want_deltas: list[str] list of metrics for which to compute delta values on output
@@ -328,15 +325,14 @@ class MikrotikQuery:
         out = {}
         for interface in self.ini['get_traffic'].split():
             errcode, ans = self._query('/interface/print',
-                              {"stats-detail":"", "from":interface})
+                                       {"stats-detail": "", "from": interface})
 
             if errcode != 0:
                 continue
 
             ans = ans[0]
-            ak = list(ans.keys())
-            for var in ak:
-                if var in want_deltas:
+            for var in want_deltas:
+                if var in ans:
                     dname, dval = self.process_stats(ans, interface, var, True)
                     ans[dname] = dval
 
@@ -360,7 +356,7 @@ class MikrotikQuery:
 
 
     ####################################################
-    def get_firewall(self, filter_on: str = "", search: str = "") -> dict[str,Any]:
+    def get_firewall(self, filter_on: str = "", search: str = "") -> dict[str, Any]:
         """Will query device for firewall stats with possible filtering.
         Default filter is STATID: on comment's start
 
@@ -371,9 +367,9 @@ class MikrotikQuery:
         out = {}
         errcode, ans = self._query("/ip/firewall/filter/print")
         if errcode != 0:
-            return []
+            return {}
 
-        for item in cast(list[dict[str,Any]], ans):
+        for item in cast(list[dict[str, Any]], ans):
             if filter_on != "":
                 if filter_on not in item:
                     continue
@@ -403,10 +399,37 @@ class MikrotikQuery:
                 metric_out_name = sid + '-' + metric
                 out[metric_out_name] = int(item[metric])
 
-                # computing deltas
-                _, val = self.process_stats({metric_out_name:item[metric]}, "firewall",
-                                               metric_out_name, True)
-                out[metric_out_name + "-delta"] = val
+                dname, dval = self.process_stats({metric_out_name: item[metric]}, "firewall",
+                                   metric_out_name, True)
+                out[dname] = dval
+
+        return out
+
+    ####################################################
+    def get_firewall_lists(self) -> dict[str, Any]:
+        """Query for lists dynamics like blacklists, synflood, etc.
+        :return: dict[str,Any]: "<list name>":<count>, "<list name-delta>":<change>
+        """
+        if not conf_vars_are_set(self.ini, ['get_firewall_lists']):
+            return {}
+
+        errcode, ans = self._query('/ip/firewall/address-list/print')
+        if errcode != 0:
+            return {}
+
+        out = {}
+        list_names: list[str] = self.ini['get_firewall_lists'].split()
+        for name in list_names:
+            out[name] = 0
+
+        for item in cast(list[dict[str, Any]], ans):
+            if item['list'] not in list_names:
+                continue
+            out[item['list']] += 1
+
+        for name in list_names:
+            dname, dval = self.process_stats(out, 'fw-lists', name, True)
+            out[dname] = dval
 
         return out
 
@@ -427,7 +450,7 @@ def post_system_status(dev: MikrotikQuery) -> str:
 
     status: list[str] = []
     if ans["status"] != "OK":
-        status += ans["status"]
+        return ans["status"]  # will be posted on main topic (hopefully)
 
     to_send: dict[str, Any] = {}
 
@@ -509,7 +532,7 @@ def post_traffic(dev: MikrotikQuery) -> None:
 
         mqtt_sender.send_json_short(dev.make_topic_path(interface.lower() + '/state',
                                                         ini_key='topic_traffic'),
-                           status)
+                                    status)
 
 
 ####################################################
@@ -528,7 +551,7 @@ def post_firewall(dev: MikrotikQuery) -> None:
             continue
 
         mqtt_sender.send_json_short(dev.make_topic_path(topic),
-                           msgs[topic], retain=False)
+                                    msgs[topic], retain=False)
 
         # for now just send a vanishing 'OK'
         mqtt_sender.send_json_short(dev.make_topic_path(topic + '/state'),

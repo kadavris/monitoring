@@ -1,3 +1,4 @@
 #!/bin/sh
-su smarthome -s /bin/sh -c './mikrotik2mqtt --debug'
+export PYTHONPATH="/usr/local/lib/kadavris"
+python ./mikrotik2mqtt --debug 2>&1 | tee test.log
 pkill -9 -f router-reports
