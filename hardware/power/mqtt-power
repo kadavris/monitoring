@@ -70,7 +70,7 @@ def load_config(c_file: str) -> None:
     if ARGS.debug:
         print("+ Loading config:", file)
 
-    GLOBAL_CONFIG.read(file)
+    FULL_CONFIG.read(file)
 
 
 ########################################
@@ -134,7 +134,7 @@ def get_model_specific_config(dev_id: str, keyword: str, default: str = "") -> s
     """
     global FULL_CONFIG
 
-    return GLOBAL_CONFIG["power." + dev_id].get(keyword, default)
+    return FULL_CONFIG["power." + dev_id].get(keyword, default)
 
 
 ########################################
@@ -147,11 +147,11 @@ def device_init(dev_id: str) -> bool:
     global DEVICES, FULL_CONFIG
 
     dev_sect_name = 'power.' + dev_id
-    if dev_sect_name not in GLOBAL_CONFIG:
+    if dev_sect_name not in FULL_CONFIG:
         print(f'ERROR: no device section {dev_sect_name} found in the config')
         return False
 
-    kpd = DEVICES[dev_id] = KPowerDevice(dev_id, GLOBAL_CONFIG)
+    kpd = DEVICES[dev_id] = KPowerDevice(dev_id, FULL_CONFIG)
 
     if kpd.init_errors > 0:
         print(f'ERROR: device {dev_id} has errors setting up: ', kpd.collect_messages())
