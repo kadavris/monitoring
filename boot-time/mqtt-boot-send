@@ -2,7 +2,7 @@
 # This script is a part of smarthome pack
 # It will send initial data about this host to the mqtt
 
-sender="/etc/smarthome/mqtt/mqtt --stdin --quiet"
+sender="/usr/local/bin/mqtt-tool --stdin --quiet"
 
 host=`hostname|sed "s/\n//"`
 prefix="sys/$host"

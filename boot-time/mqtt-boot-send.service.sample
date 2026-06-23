@@ -1,12 +1,10 @@
 [Unit]
 Description=Initial host info provider for MQTT
-After=network.target
+After=network-online.target
 
 [Service]
 Type=oneshot
-#ExecStartPre=/usr/bin/touch /path/to/config.ini
-ExecStart=/etc/smarthome/reporters/mqtt-boot-send
-#ExecStartPost=/run/mqtt-boot-send.runonce
+ExecStart=/usr/local/bin/mqtt-boot-send
 ConditionFileExists=!/run/mqtt-boot-send.runonce
 RemainAfterExit=true
 
