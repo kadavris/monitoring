@@ -498,7 +498,7 @@ if check_nut in action_list:
 
 while not problems:  # main loop
     Dates_json = '{ "date":"' + time.ctime() + '", "timestamp":' + str(int(time.time())) + ' }'
-    Dates_json = Dates_json.replace(r'"', r'\"')
+    # Dates_json = Dates_json.replace(r'"', r'\"')
 
     for func in action_list:
         if not func():
@@ -514,7 +514,7 @@ while not problems:  # main loop
     time.sleep(int(DEF_CONF['sample_interval']))
 
 if problems:
-    print("! Exitting due to critical problems")
+    print("! Exiting due to critical problems")
 
 # end of the main loop - finalizing
 Sender.terminate()
