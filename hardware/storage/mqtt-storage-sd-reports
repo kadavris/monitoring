@@ -265,8 +265,11 @@ def get_cygwin_mounts() -> None:
     mf.close()
 
     for d in devices:
-        if devices[d]['mount'] != "":
-            devices[d]['mount'] += ')'
+        if 'mount' not in devices:  # options item
+            continue
+
+        if d['mount'] != "":
+            d['mount'] += ')'
 
 
 ########################################
@@ -320,9 +323,12 @@ def get_win_mounts() -> None:
         else:
             devices[sd_name]['mount'] += ',' + dlet + ':'
 
-        for d in devices:
-            if devices[d]['mount'] != "":
-                devices[d]['mount'] += ')'
+    for d in devices:
+        if 'mount' not in devices:  # options item
+            continue
+
+        if d['mount'] != "":
+            d['mount'] += ')'
 
 
 ########################################
