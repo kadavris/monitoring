@@ -52,7 +52,7 @@ if [[ $pver =~ 'cygwin' ]]; then
 else
     ptype='native'
     cwd=$(/usr/bin/cygpath -w "$cwd/")
-    svccmd="\"${cwd}$svcname\" -l $looptime -c \"$cwd\\reporters.ini\""
+    svccmd="\"${cwd}$svcname\" -l $looptime -c \"$cwd\\mqtt-storage.ini\""
 fi
 
 echo 'Stopping.'
